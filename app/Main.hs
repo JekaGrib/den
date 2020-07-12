@@ -4,6 +4,7 @@
 module Main where
 
 import           App
+import           Logger
 import qualified Data.Configurator              as C
 import qualified Data.Configurator.Types        as C
 import qualified Data.Text                      as T
@@ -27,24 +28,30 @@ pullConfig = do
 
 main :: IO ()
 main = do
+  time <- getTime                          
+  let currLogPath = "./VK.LogSession: " ++ show time ++ " bot.log"
+  writeFile currLogPath  "Create log file\n"
   conf           <- pullConfig             
   startN         <- parseConfStartN   conf 
-  botToken       <- parseConfBotToken conf  
+  botToken       <- parseConfBotToken conf
+  prio           <- parseConfPrio     conf  
   helpMsg        <- parseConfHelpMsg  conf 
   repeatQuestion <- parseConfRepeatQ  conf
   groupId        <- C.lookupDefault 12 conf "VK.group_id" 
   let config = Config startN botToken helpMsg repeatQuestion groupId
-  let handle = Handle config (getLongPollServer' handle) getUpdates' (sendMsg' handle) (sendKeyb' handle)
+  let handleLog = LogHandle (LogConfig prio) (logger handleLog currLogPath)
+  let handle = Handle config handleLog (getLongPollServer' handle) getUpdates' (sendMsg' handle) (sendKeyb' handle)
+  putStrLn "App started"
   evalStateT (run handle) ("1" ,[])
   
 
-{-
+
 getTime :: IO String
 getTime = (do
   time    <- getZonedTime
   return $ show time)     
     `catch` (\e -> ((putStrLn $ show (e :: SomeException)) >> inputLocalTime) )
--}
+
 
 parseConfStartN :: C.Config -> IO Int
 parseConfStartN conf = (do
@@ -70,7 +77,7 @@ parseConfBotToken conf = (do
     Nothing -> inputBotToken
     Just n  -> return n)
       `catch` (\e -> throw $ DuringParseConfigException $ "botToken\n" ++ show (e :: SomeException))
-{-         
+         
 parseConfPrio :: C.Config -> IO Priority
 parseConfPrio conf = (do
   str <- (C.lookup conf "VK.logLevel" :: IO (Maybe String))
@@ -84,7 +91,7 @@ parseConfPrio conf = (do
     Just "ERROR"   -> return ERROR
     Just _         -> inputLogLevel)
       `catch` (\e -> throw $ DuringParseConfigException $ "logLevel\n" ++ show (e :: SomeException))
--}
+
 parseConfHelpMsg :: C.Config -> IO String
 parseConfHelpMsg conf = (do
   str <- ((C.lookup conf "VK.help_Info_Msg") :: IO (Maybe String))
@@ -123,7 +130,7 @@ inputBotToken :: IO String
 inputBotToken = do
   putStrLn "Can`t parse value \"botToken\" from configuration file or command line\nPlease, enter bot token"
   getLine
-{-
+
 inputLogLevel :: IO Priority
 inputLogLevel = do
   putStrLn "Can`t parse value \"logLevel\" from configuration file or command line\nPlease, enter logging level (logs of this level and higher will be recorded)\nAvailable levels: DEBUG ; INFO ; WARNING ; ERROR (without quotes)"
@@ -134,7 +141,7 @@ inputLogLevel = do
     "WARNING" -> return WARNING
     "ERROR"   -> return ERROR
     _         -> inputLogLevel
--}
+
 inputHelpMsg :: IO String
 inputHelpMsg = do
   putStrLn "Can`t parse value \"/help Info Msg\" from configuration file or command line\nPlease, enter \"/help Info Msg\"\nExample: I`m super bot"
@@ -144,10 +151,9 @@ inputRepeatQ :: IO String
 inputRepeatQ = do
   putStrLn "Can`t parse value \"/repeat Info Question\" from configuration file or command line\nPlease, enter \"/repeat Info Question\"\nExample: How many times to repeat message in the future?"
   getLine
-{-
+
 inputLocalTime :: IO String
 inputLocalTime = (do
   putStrLn "Local time not found\nPlease, enter your local time in any form\nExample: 06.07.2020 16:21"
   getLine) 
     `catch` (\e -> throw $ DuringGetTimeException $ show (e :: SomeException))
--}

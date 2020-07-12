@@ -6,18 +6,26 @@ module Api.Response where
 import           Data.Aeson
 import           GHC.Generics
 import qualified Data.Text                      as T
+import           Control.Applicative
 
 
-data FromGetUpdatesJSON = FromGetUpdatesJSON {
-      ts :: T.Text
-    , updates  :: [Update]
-    } deriving (Generic, Show)
-
-instance FromJSON FromGetUpdatesJSON where
-    parseJSON = withObject "FromGetUpdatesJSON" $ \v -> FromGetUpdatesJSON
+data Answer 
+    = Answer       { ts       :: T.Text,
+                     updates  :: [Update] }
+    | FailAnswer   { fail'    :: Int }               
+    | FailTSAnswer { fail''   :: Int,
+                     ts''     :: Int }  
+    | ErrorAnswer  { error' :: Object } deriving (Generic, Show)
+         
+instance FromJSON Answer where
+    parseJSON (Object v) = (Answer 
         <$> v .: "ts"
-        <*> v .: "updates"
-
+        <*> v .: "updates") <|> ( FailAnswer
+        <$> v .: "fail") <|> ( FailTSAnswer
+        <$> v .: "fail"
+        <*> v .: "ts") <|> ( ErrorAnswer
+        <$> v .: "error")
+       
 
 data Update = Update {
       typeUpd :: T.Text
@@ -45,9 +53,50 @@ data AboutObj = AboutObj {
     , fwd_messages :: [Int]
     , important :: Bool
     , random_id :: Int
-    , attachments :: [Int]
+    , attachments :: [Attachment]
     , is_hidden :: Bool
     } deriving (Generic, Show)
 
-instance FromJSON AboutObj 
+instance FromJSON AboutObj
 
+data Attachment = Attachment {
+      type' :: T.Text } deriving (Generic, Show)
+
+instance FromJSON Attachment where
+    parseJSON = withObject "Attachment" $ \v -> Attachment
+        <$> v .: "type"
+
+data GetPollServerJSONBody 
+    = GetPollServerJSONBody { response :: PollServerInfo} 
+    | ErrorAnswerServ  { error'' :: Object } deriving (Generic, Show)
+
+instance FromJSON GetPollServerJSONBody where
+    parseJSON (Object v) = (GetPollServerJSONBody
+        <$> v .: "response") <|> ( ErrorAnswerServ
+        <$> v .: "error")
+
+
+data PollServerInfo 
+    = PollServerInfo { keyPollServ :: T.Text,
+                       serverPollServ  :: T.Text,
+                       tsPollServ  :: T.Text} deriving (Generic, Show)
+
+
+instance FromJSON PollServerInfo where
+    parseJSON (Object v) = PollServerInfo
+        <$> v .: "key"
+        <*> v .: "server"
+        <*> v .: "ts" 
+
+data Response 
+    = Response { response' :: Int }
+    | ErrorAnswerMsg  { error''' :: Object } deriving (Generic, Show)
+
+instance FromJSON Response where
+    parseJSON (Object v) = (Response
+        <$> v .: "response") <|> ( ErrorAnswerMsg
+        <$> v .: "error")
+
+data ErrorInfo = ErrorInfo { error_code :: Int} deriving (Generic, Show)
+
+instance FromJSON ErrorInfo
