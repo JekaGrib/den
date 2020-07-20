@@ -37,12 +37,12 @@ main = do
   prio           <- parseConfPrio     conf  
   helpMsg        <- parseConfHelpMsg  conf 
   repeatQuestion <- parseConfRepeatQ  conf
-  groupId        <- C.lookupDefault 12 conf "VK.group_id" 
+  groupId        <- parseConfGroupId  conf 
   let config = Config startN botToken helpMsg repeatQuestion groupId
   let handleLog = LogHandle (LogConfig prio) (logger handleLog currLogPath)
   let handle = Handle config handleLog (getLongPollServer' handle) getUpdates' (sendMsg' handle) (sendKeyb' handle)
   putStrLn "App started"
-  evalStateT (run handle) ("1" ,[])
+  evalStateT (forever $ run handle) ("1" ,[])
   
 
 
@@ -84,7 +84,7 @@ parseConfPrio conf = (do
     `catch` ( (\e -> return Nothing) :: C.KeyError  -> IO (Maybe String) )
     `catch` ( (\e -> return Nothing) :: IOException -> IO (Maybe String) ) 
   case str of
-    Nothing -> inputLogLevel
+    Nothing        -> inputLogLevel
     Just "DEBUG"   -> return DEBUG
     Just "INFO"    -> return INFO
     Just "WARNING" -> return WARNING
@@ -109,6 +109,16 @@ parseConfRepeatQ conf = (do
     `catch` ( (\e -> return Nothing) :: IOException -> IO (Maybe String) ) 
   case str of
     Nothing -> inputRepeatQ
+    Just n  -> return n)
+      `catch` (\e -> throw $ DuringParseConfigException $ "repeatQuestion\n" ++ show (e :: SomeException))
+
+parseConfGroupId :: C.Config -> IO Int
+parseConfGroupId conf = (do
+  str <- ((C.lookup conf "VK.group_id") :: IO (Maybe Int))
+    `catch` ( (\e -> return Nothing) :: C.KeyError  -> IO (Maybe Int) )
+    `catch` ( (\e -> return Nothing) :: IOException -> IO (Maybe Int) ) 
+  case str of
+    Nothing -> inputGroupId
     Just n  -> return n)
       `catch` (\e -> throw $ DuringParseConfigException $ "repeatQuestion\n" ++ show (e :: SomeException))
 
@@ -151,6 +161,16 @@ inputRepeatQ :: IO String
 inputRepeatQ = do
   putStrLn "Can`t parse value \"/repeat Info Question\" from configuration file or command line\nPlease, enter \"/repeat Info Question\"\nExample: How many times to repeat message in the future?"
   getLine
+
+inputGroupId :: IO Int
+inputGroupId = do
+  putStrLn "Can`t parse value \"group id\" from configuration file or command line\nPlease, enter NUMBER of group id\nExample: 123456789"
+  str <- getLine
+  case all isNumber str of 
+      True -> do
+        let grId = read str 
+        return grId
+      _ -> inputGroupId
 
 inputLocalTime :: IO String
 inputLocalTime = (do

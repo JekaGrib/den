@@ -61,25 +61,32 @@ data OpenRepeat = OpenRepeat Int
 --keyB = {"one_time": true,"buttons": [[{"action": {"type": "text","label": "1"},"color": "positive"}],[{"action": {"type": "text","label": "2"},"color": "positive"}],[{"action": {"type": "text","label": "3"},"color": "positive"}],[{"action": {"type": "text","label": "4"},"color": "positive"}],[{"action": {"type": "text","label": "5"},"color": "positive"}]],"inline":false}
 keyB = "%7B%22one_time%22%3A%20true%2C%22buttons%22%3A%20%5B%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%221%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%222%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%223%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%224%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%225%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%5D%2C%22inline%22%3Afalse%7D"
 
-
-
 run :: (Monad m, MonadCatch m) => Handle m -> StateT (T.Text,[(Int , Either OpenRepeat Int)]) m ()
 run h = do
+  jsonServ <- getServer h
+  forever $ runServ h jsonServ
+
+getServer :: (Monad m, MonadCatch m) => Handle m -> StateT (T.Text,[(Int , Either OpenRepeat Int)]) m LBS.ByteString
+getServer h = do
   lift $ logDebug (hLog h) $ "Send request to getLongPollServer: https://api.vk.com/method/groups.getLongPollServer?group_id=" ++ show (cGroupId (hConf h)) ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n"
-  jsonServ <- lift $ getLongPollServer h
+  jsonServ <- lift $ getLongPollServer h `catch` (\e -> do
+                                logError (hLog h) $ show e ++ " GetLongPollServer fail\n"
+                                throwM $ DuringGetLongPollServerException $ show (e :: SomeException))
   lift $ logDebug (hLog h) ("Get response: " ++ show jsonServ ++ "\n")
   lift $ checkGetServResponse h jsonServ
   let ts = tsPollServ . response . fromJust . decode $ jsonServ
   modify $ foo ts
-  forever $ runServ h jsonServ
+  return jsonServ
   
 runServ :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> StateT (T.Text,[(Int , Either OpenRepeat Int)]) m ()   
 runServ h jsonServ = do
   let key =  extractKey $ jsonServ
   let server = extractServ $ jsonServ
   ts <- gets fst
-  lift $ logDebug (hLog h) $ "Send request to getUpdates: https://api.vk.com/method/groups.getLongPollServer?group_id=" ++ show (cGroupId (hConf h)) ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n"
-  json <- lift $ getUpdates h key server ts
+  lift $ logDebug (hLog h) $ "Send request to getUpdates: " ++ T.unpack server ++ "?act=a_check&key=" ++ T.unpack key ++ "&ts=" ++ T.unpack ts ++ "&wait=25\n"
+  json <- lift $ getUpdates h key server ts `catch` (\e -> do
+                                logError (hLog h) $ show e ++ " GetUpdates fail\n"
+                                throwM $ DuringGetUpdatesException $ show (e :: SomeException))
   lift $ logDebug (hLog h) ("Get response: " ++ show json ++ "\n")
   checkUpdates h json
   let newTs = extractTs $ json
@@ -91,8 +98,10 @@ chooseAction :: (Monad m, MonadCatch m) => Handle m -> Update -> StateT (T.Text,
 chooseAction h upd = do
   lift $ logInfo (hLog h) ("Analysis update from the list\n")
   case upd of
+    UnknownUpdate _ -> do
+      lift $ logWarning (hLog h) ("There is UNKNOWN UPDATE. BOT WILL IGNORE IT\n")
     Update {objectUpd = AboutObj {attachments = [Attachment {type' = _ }]}} -> do
-      lift $ logInfo (hLog h) ("There is attachment update. Bot will ignore it\n") 
+      lift $ logWarning (hLog h) ("There is attachment update. BOT WILL IGNORE IT\n") 
     _ -> do
       let usId = extractUserId $ upd  
       let msg = extractTextMsg $ upd
@@ -107,43 +116,49 @@ chooseAction h upd = do
               modify $ func $ changeDB usId $ Right newN
               let infoMsg = T.pack $ "Number of repeats successfully changed from " ++ show oldN ++ " to " ++ show newN ++ "\n"
               lift $ logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack infoMsg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
-              response <- lift $ sendMsg h usId infoMsg
+              response <- lift $ sendMsg h usId infoMsg `catch` (\e -> do
+                                    logError (hLog h) $ show e ++ " SendMessage fail\n"    
+                                    throwM $ DuringSendMsgException (Msg infoMsg) (ToUserId usId) $ show (e :: SomeException))
               lift $ logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
               lift $ checkSendMsgResponse h usId infoMsg response
-              lift $ logInfo (hLog h) ("Msg " ++ show infoMsg  ++ " was sent to user " ++ show usId ++ "\n")
             Nothing -> do
               lift $ logWarning (hLog h) ("User " ++ show usId ++ " press UNKNOWN BUTTON, close OpenRepeat mode, leave old number of repeats: " ++ show oldN ++ "\n")
               modify $ func $ changeDB usId $ Right oldN
               let infoMsg = T.pack $ "UNKNOWN NUMBER\nI,m ssory, number of repeats has not changed, it is still " ++ show oldN ++ "\nTo change it you may sent me command \"/repeat\" and then choose number from 1 to 5 on keyboard\nPlease, try again later\n"
               lift $ logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack infoMsg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
-              response <- lift $ sendMsg h usId infoMsg
+              response <- lift $ sendMsg h usId infoMsg `catch` (\e -> do
+                                    logError (hLog h) $ show e ++ " SendMessage fail\n"    
+                                    throwM $ DuringSendMsgException (Msg infoMsg) (ToUserId usId) $ show (e :: SomeException))
               lift $ logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
               lift $ checkSendMsgResponse h usId infoMsg response
-              lift $ logInfo (hLog h) ("Msg " ++ show infoMsg  ++ " was sent to user " ++ show usId ++ "\n")
         _ -> do
           let currN = case lookup usId db of { Just (Right n) -> n ; Nothing -> cStartN (hConf h) }
           case msg of  
             "/help" -> do
               let infoMsg = T.pack $ cHelpMsg (hConf h) 
               lift $ logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack infoMsg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
-              response <- lift $ sendMsg h usId infoMsg
+              response <- lift $ sendMsg h usId infoMsg `catch` (\e -> do
+                                    logError (hLog h) $ show e ++ " SendMessage fail\n"    
+                                    throwM $ DuringSendMsgException (Msg infoMsg) (ToUserId usId) $ show (e :: SomeException))
               lift $ logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
               lift $ checkSendMsgResponse h usId infoMsg response
-              lift $ logInfo (hLog h) ("Msg " ++ show infoMsg  ++ " was sent to user " ++ show usId ++ "\n")
             "/repeat" -> do
               let infoMsg = T.pack $ " : Current number of repeats your message.\n" ++ cRepeatQ (hConf h)
               lift $ logDebug (hLog h) $ "Send request to send keyboard: https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ show currN ++ T.unpack infoMsg ++ "&keyboard=" ++ keyB ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
-              response <- lift $ sendKeyb h usId currN infoMsg
+              response <- lift $ sendKeyb h usId currN infoMsg `catch` (\e -> do
+                                          logError (hLog h) $ show e ++ " SendKeyb fail\n" 
+                                          throwM $ DuringSendKeybException (ToUserId usId) $ show (e :: SomeException))
               lift $ logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
-              lift $ checkSendKeybResponse h usId response
+              lift $ checkSendKeybResponse h usId currN infoMsg response
               modify $ func $ changeDB usId $ Left $ OpenRepeat currN 
             _ -> do 
               lift $ replicateM_ currN $ do
                 logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack msg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
-                response <- sendMsg h usId msg
+                response <- sendMsg h usId msg `catch` (\e -> do
+                                    logError (hLog h) $ show e ++ " SendMessage fail\n"    
+                                    throwM $ DuringSendMsgException (Msg msg) (ToUserId usId) $ show (e :: SomeException))
                 logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
                 checkSendMsgResponse h usId msg response
-                logInfo (hLog h) ("Msg " ++ show msg  ++ " was sent to user " ++ show usId ++ "\n")
 
 
 checkGetServResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m ()
@@ -157,7 +172,6 @@ checkGetServResponse h json = do
         throwM $ CheckGetServerResponseException $ "NEGATIVE RESPONSE:\n"   ++ show json
       Just _ -> do
         logInfo (hLog h) $ "Work with received server\n"
-        return ()
 
 checkUpdates :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> StateT (T.Text,[(Int , Either OpenRepeat Int)]) m ()
 checkUpdates h json = do
@@ -168,11 +182,16 @@ checkUpdates h json = do
       Just (ErrorAnswer { error' = _ } ) -> do
         lift $ logError (hLog h) $ "NEGATIVE RESPONSE to getUpdates:\n" ++ show json
         throwM $ CheckGetUpdatesResponseException $ "NEGATIVE RESPONSE:\n"   ++ show json
-      Just (FailAnswer 2 ) -> run h
-      Just (FailAnswer 3 ) -> run h
+      Just (FailAnswer 2 ) -> do
+        lift $ logWarning (hLog h) ("FAIL. Long poll server key expired, need to request new key\n")
+        return ()
+      Just (FailAnswer 3 ) -> do
+        lift $ logWarning (hLog h) ("FAIL. Long poll server information is lost, need to request new key and ts\n")
+        return ()
       Just (FailTSAnswer {fail'' = 1 , ts'' = x } ) -> do
+        lift $ logWarning (hLog h) ("FAIL. Ts in request is wrong, need to use received ts\n")
         modify $ foo (T.pack . show $ x)
-        runServ h json
+        return ()
       Just (FailAnswer _ ) -> do
         lift $ logError (hLog h) $ "NEGATIVE RESPONSE to getUpdates:\n" ++ show json
         throwM $ CheckGetUpdatesResponseException $ "NEGATIVE RESPONSE:\n"   ++ show json
@@ -190,10 +209,11 @@ checkSendMsgResponse h usId msg json = do
       Just (ErrorAnswerMsg { error''' = _ } ) -> do
         logError (hLog h) $ "NEGATIVE RESPONSE to sendMessage:\n" ++ show json
         throwM $ CheckSendMsgResponseException (Msg msg) (ToUserId usId) $ "NEGATIVE RESPONSE:\n" ++ show json ++ "\nMESSAGE NOT SENT"
-      Just _                       -> return ()
+      Just _                       -> do
+        logInfo (hLog h) ("Msg " ++ show msg  ++ " was sent to user " ++ show usId ++ "\n")
 
-checkSendKeybResponse :: (Monad m, MonadCatch m) => Handle m -> Int -> LBS.ByteString -> m ()
-checkSendKeybResponse h usId json = do
+checkSendKeybResponse :: (Monad m, MonadCatch m) => Handle m -> Int -> Int -> T.Text -> LBS.ByteString -> m ()
+checkSendKeybResponse h usId n msg json = do
   case decode json of
       Nothing                      -> do
         logError (hLog h) $ "UNKNOWN RESPONSE to sendKeyboard:\n" ++ show json
@@ -201,7 +221,8 @@ checkSendKeybResponse h usId json = do
       Just (ErrorAnswerMsg { error''' = _ } ) -> do
         logError (hLog h) $ "NEGATIVE RESPONSE to sendKeyboard:\n" ++ show json
         throwM $ CheckSendKeybResponseException (ToUserId usId) $ "NEGATIVE RESPONSE:\n" ++ show json ++ "\nKEYBOARD NOT SENT"
-      Just _                       -> return ()
+      Just _                       -> do
+        logInfo (hLog h) ("Keyboard with message: " ++ show n ++ show msg ++ " was sent to user " ++ show usId ++ "\n")
 
 
 

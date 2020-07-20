@@ -25,21 +25,24 @@ instance FromJSON Answer where
         <$> v .: "fail"
         <*> v .: "ts") <|> ( ErrorAnswer
         <$> v .: "error")
-       
 
-data Update = Update {
-      typeUpd :: T.Text
-    , objectUpd  :: AboutObj
-    , group_id  :: Int
-    , event_id  :: T.Text
-    } deriving (Generic, Show)
+
+
+data Update 
+  = Update {typeUpd :: T.Text,
+            objectUpd  :: AboutObj,
+            group_id  :: Int,
+            event_id  :: T.Text} 
+  | UnknownUpdate  {typeUpdate :: T.Text} deriving (Generic, Show)
 
 instance FromJSON Update where
-    parseJSON = withObject "Update" $ \v -> Update
+    parseJSON (Object v) = (Update
         <$> v .: "type"
         <*> v .: "object"
         <*> v .: "group_id"
-        <*> v .: "event_id"
+        <*> v .: "event_id") <|> (UnknownUpdate 
+        <$> v .: "type")
+
 
 
 data AboutObj = AboutObj {
@@ -100,3 +103,4 @@ instance FromJSON Response where
 data ErrorInfo = ErrorInfo { error_code :: Int} deriving (Generic, Show)
 
 instance FromJSON ErrorInfo
+
