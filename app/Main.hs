@@ -5,6 +5,7 @@ module Main where
 
 import           App
 import           Logger
+import           Api.Response
 import qualified Data.Configurator              as C
 import qualified Data.Configurator.Types        as C
 import qualified Data.Text                      as T
@@ -42,7 +43,7 @@ main = do
   let handleLog = LogHandle (LogConfig prio) (logger handleLog currLogPath)
   let handle = Handle config handleLog (getLongPollServer' handle) getUpdates' (sendMsg' handle) (sendKeyb' handle)
   putStrLn "App started"
-  evalStateT (forever $ run handle) ("1" ,[])
+  evalStateT (forever $ run handle) (ServerInfo "A" "A" "1" ,[])
   
 
 

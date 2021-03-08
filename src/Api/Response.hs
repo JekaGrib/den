@@ -70,7 +70,7 @@ instance FromJSON Attachment where
         <$> v .: "type"
 
 data GetPollServerJSONBody 
-    = GetPollServerJSONBody { response :: PollServerInfo} 
+    = GetPollServerJSONBody { response :: ServerInfo} 
     | ErrorAnswerServ  { error'' :: Object } deriving (Generic, Show)
 
 instance FromJSON GetPollServerJSONBody where
@@ -79,14 +79,14 @@ instance FromJSON GetPollServerJSONBody where
         <$> v .: "error")
 
 
-data PollServerInfo 
-    = PollServerInfo { keyPollServ :: T.Text,
-                       serverPollServ  :: T.Text,
-                       tsPollServ  :: T.Text} deriving (Generic, Show)
+data ServerInfo 
+    = ServerInfo { key :: T.Text,
+                   server  :: T.Text,
+                   tsSI  :: T.Text} deriving (Generic, Show)
 
 
-instance FromJSON PollServerInfo where
-    parseJSON (Object v) = PollServerInfo
+instance FromJSON ServerInfo where
+    parseJSON (Object v) = ServerInfo
         <$> v .: "key"
         <*> v .: "server"
         <*> v .: "ts" 

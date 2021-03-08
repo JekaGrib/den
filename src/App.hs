@@ -58,15 +58,16 @@ data Config = Config
 data OpenRepeat = OpenRepeat Int
                         deriving (Eq,Show)
 
+
 --keyB = {"one_time": true,"buttons": [[{"action": {"type": "text","label": "1"},"color": "positive"}],[{"action": {"type": "text","label": "2"},"color": "positive"}],[{"action": {"type": "text","label": "3"},"color": "positive"}],[{"action": {"type": "text","label": "4"},"color": "positive"}],[{"action": {"type": "text","label": "5"},"color": "positive"}]],"inline":false}
 keyB = "%7B%22one_time%22%3A%20true%2C%22buttons%22%3A%20%5B%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%221%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%222%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%223%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%224%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%225%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%5D%2C%22inline%22%3Afalse%7D"
 
-run :: (Monad m, MonadCatch m) => Handle m -> StateT (T.Text,[(Int , Either OpenRepeat Int)]) m ()
+run :: (Monad m, MonadCatch m) => Handle m -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m ()
 run h = do
-  jsonServ <- getServer h
-  forever $ runServ h jsonServ
+  getServer h
+  forever $ runServ h
 
-getServer :: (Monad m, MonadCatch m) => Handle m -> StateT (T.Text,[(Int , Either OpenRepeat Int)]) m LBS.ByteString
+getServer :: (Monad m, MonadCatch m) => Handle m -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m ()
 getServer h = do
   lift $ logDebug (hLog h) $ "Send request to getLongPollServer: https://api.vk.com/method/groups.getLongPollServer?group_id=" ++ show (cGroupId (hConf h)) ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n"
   jsonServ <- lift $ getLongPollServer h `catch` (\e -> do
@@ -74,27 +75,28 @@ getServer h = do
                                 throwM $ DuringGetLongPollServerException $ show (e :: SomeException))
   lift $ logDebug (hLog h) ("Get response: " ++ show jsonServ ++ "\n")
   lift $ checkGetServResponse h jsonServ
-  let ts = tsPollServ . response . fromJust . decode $ jsonServ
-  modify $ foo ts
-  return jsonServ
-  
-runServ :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> StateT (T.Text,[(Int , Either OpenRepeat Int)]) m ()   
-runServ h jsonServ = do
+  let ts = tsSI . response . fromJust . decode $ jsonServ
   let key =  extractKey $ jsonServ
   let server = extractServ $ jsonServ
-  ts <- gets fst
+  modify $ changeServerInfo (ServerInfo key server ts)
+  
+getUpdAndLog :: (Monad m, MonadCatch m) => Handle m -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m LBS.ByteString     
+getUpdAndLog h = do
+  ServerInfo key server ts <- gets fst
   lift $ logDebug (hLog h) $ "Send request to getUpdates: " ++ T.unpack server ++ "?act=a_check&key=" ++ T.unpack key ++ "&ts=" ++ T.unpack ts ++ "&wait=25\n"
   json <- lift $ getUpdates h key server ts `catch` (\e -> do
                                 logError (hLog h) $ show e ++ " GetUpdates fail\n"
                                 throwM $ DuringGetUpdatesException $ show (e :: SomeException))
   lift $ logDebug (hLog h) ("Get response: " ++ show json ++ "\n")
-  checkUpdates h json
-  let newTs = extractTs $ json
-  modify $ foo newTs
-  let upds = extractUpdates $ json
+  return json
+
+runServ :: (Monad m, MonadCatch m) => Handle m -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m ()   
+runServ h = do
+  json <- getUpdAndLog h
+  upds <- checkUpdates h json
   mapM_ (chooseAction h) upds
 
-chooseAction :: (Monad m, MonadCatch m) => Handle m -> Update -> StateT (T.Text,[(Int , Either OpenRepeat Int)]) m ()
+chooseAction :: (Monad m, MonadCatch m) => Handle m -> Update -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m ()
 chooseAction h upd = do
   lift $ logInfo (hLog h) ("Analysis update from the list\n")
   case upd of
@@ -173,7 +175,7 @@ checkGetServResponse h json = do
       Just _ -> do
         logInfo (hLog h) $ "Work with received server\n"
 
-checkUpdates :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> StateT (T.Text,[(Int , Either OpenRepeat Int)]) m ()
+checkUpdates :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m [Update]
 checkUpdates h json = do
   case decode json of
       Nothing                      -> do
@@ -184,21 +186,34 @@ checkUpdates h json = do
         throwM $ CheckGetUpdatesResponseException $ "NEGATIVE RESPONSE:\n"   ++ show json
       Just (FailAnswer 2 ) -> do
         lift $ logWarning (hLog h) ("FAIL. Long poll server key expired, need to request new key\n")
-        return ()
+        getServer h
+        json2 <- getUpdAndLog h
+        checkUpdates h json2
       Just (FailAnswer 3 ) -> do
         lift $ logWarning (hLog h) ("FAIL. Long poll server information is lost, need to request new key and ts\n")
-        return ()
-      Just (FailTSAnswer {fail'' = 1 , ts'' = x } ) -> do
+        getServer h
+        json2 <- getUpdAndLog h
+        checkUpdates h json2
+      Just (FailTSAnswer {fail'' = 1 , ts'' = ts } ) -> do
         lift $ logWarning (hLog h) ("FAIL. Ts in request is wrong, need to use received ts\n")
-        modify $ foo (T.pack . show $ x)
-        return ()
+        modify $ changeTs (T.pack . show $ ts)
+        json2 <- getUpdAndLog h
+        checkUpdates h json2
+      Just (FailTSAnswer {fail'' = _ , ts'' = ts } ) -> do
+        lift $ logWarning (hLog h) ("FAIL. Ts in request is wrong, need to use received ts\n")
+        modify $ changeTs (T.pack . show $ ts)
+        json2 <- getUpdAndLog h
+        checkUpdates h json2
       Just (FailAnswer _ ) -> do
         lift $ logError (hLog h) $ "NEGATIVE RESPONSE to getUpdates:\n" ++ show json
         throwM $ CheckGetUpdatesResponseException $ "NEGATIVE RESPONSE:\n"   ++ show json
       Just (Answer { updates = [] }) -> do
         lift $ logInfo (hLog h) ("No new updates\n")
-      Just _ -> do
+        return []
+      Just (Answer ts upds) -> do
+        modify $ changeTs ts
         lift $ logInfo (hLog h) ("There is new updates list\n")
+        return upds
 
 checkSendMsgResponse :: (Monad m, MonadCatch m) => Handle m -> Int -> T.Text -> LBS.ByteString -> m ()
 checkSendMsgResponse h usId msg json = do
@@ -261,10 +276,10 @@ extractTs :: LBS.ByteString -> T.Text
 extractTs = ts . fromJust . decode
 
 extractKey :: LBS.ByteString -> T.Text
-extractKey = keyPollServ . response . fromJust . decode
+extractKey = key . response . fromJust . decode
 
 extractServ :: LBS.ByteString -> T.Text
-extractServ = serverPollServ . response . fromJust . decode
+extractServ = server . response . fromJust . decode
 
 extractTextMsg :: Update -> T.Text
 extractTextMsg = text . objectUpd 
@@ -272,8 +287,11 @@ extractTextMsg = text . objectUpd
 extractUserId :: Update -> Int
 extractUserId = from_id . objectUpd
 
-foo :: a -> (a,b) -> (a,b)
-foo x (y,z) = (x,z)
+changeServerInfo :: ServerInfo -> (ServerInfo,a) -> (ServerInfo,a)
+changeServerInfo newInfo (oldInfo,a) = (newInfo,a)
+
+changeTs :: T.Text -> (ServerInfo,a) -> (ServerInfo,a)
+changeTs newTs ((ServerInfo key serv oldTs),a) = ((ServerInfo key serv newTs),a)
 
 func :: (b -> b) -> (a,b) -> (a,b)
 func f (a,b) = (a, f b)
