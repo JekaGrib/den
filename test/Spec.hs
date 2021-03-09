@@ -4,6 +4,7 @@
 import           Test.Hspec
 import           App
 import           Logger
+import           Api.Response                   (ServerInfo(..))
 import qualified Data.Text                      as T
 import qualified Data.ByteString.Lazy           as LBS
 import           Control.Monad.State
@@ -52,16 +53,16 @@ main :: IO ()
 main = hspec $ do
   describe "getServer" $ do
     it "throw Exception with error answer" $ do
-      evalStateT (evalStateT (getServer handle3) ("1",initialDB1) ) [] 
+      evalStateT (evalStateT (getServer handle3) (ServerInfo "A" "A" "1",initialDB1) ) [] 
         `shouldThrow` ( == (CheckGetServerResponseException $ "NEGATIVE RESPONSE:\n" ++ show json5))
 
     it "throw CheckGetServerResponseException with unknown answer" $ do
-      evalStateT (evalStateT (getServer handle4) ("1",initialDB1) ) [] 
+      evalStateT (evalStateT (getServer handle4) (ServerInfo "A" "A" "1",initialDB1) ) [] 
         `shouldThrow` ( == (CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n" ++ show json6))    
   
   describe "(getServer >>= runServ)" $ do
     it "work with empty update list" $ do
-      state <- execStateT (evalStateT (getServer handle1 >>= runServ handle1) ("1",initialDB1) ) []
+      state <- execStateT (evalStateT (getServer handle1 >> runServ handle1) (ServerInfo "A" "A" "1",initialDB1) ) []
       reverse state `shouldBe`
         [LOGMSG DEBUG "Send request to getLongPollServer: https://api.vk.com/method/groups.getLongPollServer?group_id=321&access_token=ABC123&v=5.103\n", 
         GOTSERVER,
@@ -73,7 +74,7 @@ main = hspec $ do
         LOGMSG INFO "No new updates\n"]
 
     it "work with singleton update list with text msg" $ do
-      state <- execStateT (evalStateT (getServer handle2 >>= runServ handle2) ("1",initialDB1) ) []
+      state <- execStateT (evalStateT (getServer handle2 >> runServ handle2) (ServerInfo "A" "A" "1",initialDB1) ) []
       reverse state `shouldBe`
         [LOGMSG DEBUG "Send request to getLongPollServer: https://api.vk.com/method/groups.getLongPollServer?group_id=321&access_token=ABC123&v=5.103\n", 
         GOTSERVER,
@@ -92,7 +93,7 @@ main = hspec $ do
           LOGMSG INFO "Msg \"love\" was sent to user 123\n"])
     
     it "work with singleton update list with gif msg (do nothing)" $ do
-      state <- execStateT (evalStateT (getServer handle5 >>= runServ handle5) ("1",initialDB1) ) []
+      state <- execStateT (evalStateT (getServer handle5 >> runServ handle5) (ServerInfo "A" "A" "1",initialDB1) ) []
       reverse state `shouldBe`
         [LOGMSG DEBUG "Send request to getLongPollServer: https://api.vk.com/method/groups.getLongPollServer?group_id=321&access_token=ABC123&v=5.103\n", 
         GOTSERVER,
@@ -106,11 +107,11 @@ main = hspec $ do
         LOGMSG WARNING "There is attachment update. BOT WILL IGNORE IT\n"] 
     
     it "throw CheckGetUpdatesException with error answer" $ do
-      evalStateT (evalStateT (getServer handle6 >>= runServ handle6) ("1",initialDB1) ) []
+      evalStateT (evalStateT (getServer handle6 >> runServ handle6) (ServerInfo "A" "A" "1",initialDB1) ) []
         `shouldThrow` ( == (CheckGetUpdatesResponseException $ "NEGATIVE RESPONSE:\n" ++ show json5))
     
     it "throw CheckGetUpdatesException with unknown answer" $ do
-      evalStateT (evalStateT (getServer handle7 >>= runServ handle7) ("1",initialDB1) ) []
+      evalStateT (evalStateT (getServer handle7 >> runServ handle7) (ServerInfo "A" "A" "1",initialDB1) ) []
         `shouldThrow` ( == (CheckGetUpdatesResponseException $ "UNKNOWN RESPONSE:\n" ++ show json6))
 
 json1 = "{\"response\":{\"key\":\"912481cc91cb3b0e119b9be5c75b383d6887438f\",\"server\":\"https:\\/\\/lp.vk.com\\/wh000\",\"ts\":\"289\"}}"
