@@ -5,8 +5,8 @@ module App where
 
 import           Logger
 import           Api.Response
-import           Network.HTTP.Simple            ( parseRequest, setRequestBody, getResponseBody, httpLBS )
-import           Network.HTTP.Client.Conduit               
+import           Network.HTTP.Client            ( parseRequest, responseBody, httpLbs, method, requestBody, requestHeaders, RequestBody(RequestBodyLBS) )
+import           Network.HTTP.Client.TLS        (newTlsManager)
 import qualified Data.ByteString.Lazy           as LBS
 import           Data.Aeson
 import           GHC.Generics
@@ -243,28 +243,32 @@ checkSendKeybResponse h usId n msg json = do
 
 getLongPollServer' :: Handle IO -> IO LBS.ByteString
 getLongPollServer' h = do
+  manager <- newTlsManager
   req <- parseRequest $ "https://api.vk.com/method/groups.getLongPollServer?group_id=" ++ show (cGroupId (hConf h)) ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
-  res <- httpLBS req
-  return (getResponseBody res)
+  res <- httpLbs req manager
+  return (responseBody res)
 
 
 getUpdates' :: T.Text -> T.Text -> T.Text -> IO LBS.ByteString
-getUpdates' key server ts = do  
+getUpdates' key server ts = do
+  manager <- newTlsManager  
   req <- parseRequest $ T.unpack server ++ "?act=a_check&key=" ++ T.unpack key ++ "&ts=" ++ T.unpack ts ++ "&wait=25"
-  res <- httpLBS req
-  return (getResponseBody res)
+  res <- httpLbs req manager
+  return (responseBody res)
 
 sendMsg' :: Handle IO -> Int -> T.Text -> IO LBS.ByteString
 sendMsg' h usId msg = do
+  manager <- newTlsManager
   req <- parseRequest $ "https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack msg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
-  res <- httpLBS req 
-  return (getResponseBody res)
+  res <- httpLbs req manager
+  return (responseBody res)
 
 sendKeyb' :: Handle IO -> Int -> Int -> T.Text -> IO LBS.ByteString
 sendKeyb' h usId n msg = do
+  manager <- newTlsManager
   req <- parseRequest $ "https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ show n ++ T.unpack msg ++ "&keyboard=" ++ keyB ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
-  res <- httpLBS req
-  return (getResponseBody res) 
+  res <- httpLbs req manager
+  return (responseBody res) 
 
 
 

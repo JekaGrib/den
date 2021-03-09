@@ -24,7 +24,8 @@ dependencies:
 - lens
 - bytestring
 - text
-- http-conduit
+- http-client
+- http-client-tls
 - aeson
 - configurator
 - mtl
