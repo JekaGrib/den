@@ -1,12 +1,15 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
 
 module App where
 
 import           Logger
 import           Api.Response
+import           Api.Request
 import           Network.HTTP.Client            ( parseRequest, responseBody, httpLbs, method, requestBody, requestHeaders, RequestBody(RequestBodyLBS) )
 import           Network.HTTP.Client.TLS        (newTlsManager)
+import qualified Network.HTTP.Req               as R
 import qualified Data.ByteString.Lazy           as LBS
 import           Data.Aeson
 import           GHC.Generics
@@ -58,9 +61,13 @@ data Config = Config
 data OpenRepeat = OpenRepeat Int
                         deriving (Eq,Show)
 
+enc :: ToJSON a => a -> LBS.ByteString
+enc = encode
 
 --keyB = {"one_time": true,"buttons": [[{"action": {"type": "text","label": "1"},"color": "positive"}],[{"action": {"type": "text","label": "2"},"color": "positive"}],[{"action": {"type": "text","label": "3"},"color": "positive"}],[{"action": {"type": "text","label": "4"},"color": "positive"}],[{"action": {"type": "text","label": "5"},"color": "positive"}]],"inline":false}
-keyB = "%7B%22one_time%22%3A%20true%2C%22buttons%22%3A%20%5B%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%221%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%222%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%223%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%224%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%225%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%5D%2C%22inline%22%3Afalse%7D"
+--keyB1 = "{\"one_time\":true,\"buttons\":[[{\"action\": {\"type\":\"text\",\"label\":\"1\"},\"color\":\"positive\"}],[{\"action\": {\"type\":\"text\",\"label\":\"2\"},\"color\":\"positive\"}]],\"inline\":false}"
+
+--keyB = "%7B%22one_time%22%3A%20true%2C%22buttons%22%3A%20%5B%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%221%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%222%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%223%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%224%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%225%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%5D%2C%22inline%22%3Afalse%7D"
 
 run :: (Monad m, MonadCatch m) => Handle m -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m ()
 run h = do
@@ -146,7 +153,7 @@ chooseAction h upd = do
               lift $ checkSendMsgResponse h usId infoMsg response
             "/repeat" -> do
               let infoMsg = T.pack $ " : Current number of repeats your message.\n" ++ cRepeatQ (hConf h)
-              lift $ logDebug (hLog h) $ "Send request to send keyboard: https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ show currN ++ T.unpack infoMsg ++ "&keyboard=" ++ keyB ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
+              lift $ logDebug (hLog h) $ "Send request to send keyboard: https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ show currN ++ T.unpack infoMsg ++ "&keyboard=default_keyboard&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
               response <- lift $ sendKeyb h usId currN infoMsg `catch` (\e -> do
                                           logError (hLog h) $ show e ++ " SendKeyb fail\n" 
                                           throwM $ DuringSendKeybException (ToUserId usId) $ show (e :: SomeException))
@@ -265,13 +272,26 @@ sendMsg' h usId msg = do
 
 sendKeyb' :: Handle IO -> Int -> Int -> T.Text -> IO LBS.ByteString
 sendKeyb' h usId n msg = do
-  manager <- newTlsManager
-  req <- parseRequest $ "https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ show n ++ T.unpack msg ++ "&keyboard=" ++ keyB ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
-  res <- httpLbs req manager
-  return (responseBody res) 
+  let keyB = "{\"one_time\":true,\"buttons\":[[{\"action\":{\"type\":\"text\",\"label\":\"1\"},\"color\":\"positive\"}],[{\"action\":{\"type\":\"text\",\"label\":\"2\"},\"color\":\"positive\"}],[{\"action\":{\"type\":\"text\",\"label\":\"3\"},\"color\":\"positive\"}],[{\"action\":{\"type\":\"text\",\"label\":\"4\"},\"color\":\"positive\"}],[{\"action\":{\"type\":\"text\",\"label\":\"5\"},\"color\":\"positive\"}]],\"inline\":false}"
+  let hT = R.https "api.vk.com" R./: "method" R./: "messages.send"
+  let param1 = "user_id"      R.=: usId
+  let param2 = "random_id"    R.=: (0 :: Int)
+  let param3 = "message"      R.=: (show  n ++ T.unpack msg)
+  let param4 = "keyboard"     R.=: (keyB :: T.Text)
+  let param5 = "access_token" R.=: (T.pack . cBotToken $ (hConf h)) 
+  let param6 = "v"            R.=: ("5.103" :: T.Text)
+  let params = param1 <> param2 <> param3 <> param4 <> param5 <> param6 
+  let body = R.ReqBodyUrlEnc params
+  res <- R.req R.POST hT body R.lbsResponse mempty
+  return (R.responseBody res) 
 
+--req <- parseRequest $ "https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ show n ++ T.unpack msg ++ "&keyboard=" ++ keyB ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
 
+instance R.MonadHttp IO where
+  handleHttpException e =  fail ""
 
+--my :: IO R.LbsResponse
+--my = R.req R.POST hT body R.lbsResponse mempty
 
 extractUpdates :: LBS.ByteString -> [Update]
 extractUpdates = updates . fromJust . decode 
