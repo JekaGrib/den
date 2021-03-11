@@ -7,10 +7,11 @@ module App where
 import           Logger
 import           Api.Response
 import           Api.Request
-import           Network.HTTP.Client            ( parseRequest, responseBody, httpLbs, method, requestBody, requestHeaders, RequestBody(RequestBodyLBS) )
+import           Network.HTTP.Client            ( withResponse, responseClose, brConsume, responseOpen, parseRequest, responseBody, httpLbs, method, requestBody, requestHeaders, RequestBody(..) )
 import           Network.HTTP.Client.TLS        (newTlsManager)
 import qualified Network.HTTP.Req               as R
 import qualified Data.ByteString.Lazy           as LBS
+import qualified Data.ByteString                as BS
 import           Data.Aeson
 import           GHC.Generics
 import qualified Data.Text                      as T
@@ -20,6 +21,10 @@ import           Control.Monad.State
 import           Data.List
 import           Control.Monad.Catch
 import qualified Control.Exception              as E
+import           Network.HTTP.Client.MultipartFormData
+import           Data.Binary.Builder
+import qualified System.IO                      as S
+
 
 data Msg           = Msg        T.Text            deriving (Eq,Show)
 data ToUserId      = ToUserId   Int               deriving (Eq,Show)
@@ -61,8 +66,8 @@ data Config = Config
 data OpenRepeat = OpenRepeat Int
                         deriving (Eq,Show)
 
-enc :: ToJSON a => a -> LBS.ByteString
-enc = encode
+--enc :: ToJSON a => a -> LBS.ByteString
+--enc = encode
 
 --keyB = {"one_time": true,"buttons": [[{"action": {"type": "text","label": "1"},"color": "positive"}],[{"action": {"type": "text","label": "2"},"color": "positive"}],[{"action": {"type": "text","label": "3"},"color": "positive"}],[{"action": {"type": "text","label": "4"},"color": "positive"}],[{"action": {"type": "text","label": "5"},"color": "positive"}]],"inline":false}
 --keyB1 = "{\"one_time\":true,\"buttons\":[[{\"action\": {\"type\":\"text\",\"label\":\"1\"},\"color\":\"positive\"}],[{\"action\": {\"type\":\"text\",\"label\":\"2\"},\"color\":\"positive\"}]],\"inline\":false}"
@@ -86,6 +91,8 @@ getServer h = do
   let key =  extractKey $ jsonServ
   let server = extractServ $ jsonServ
   modify $ changeServerInfo (ServerInfo key server ts)
+
+  
   
 getUpdAndLog :: (Monad m, MonadCatch m) => Handle m -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m LBS.ByteString     
 getUpdAndLog h = do
@@ -109,11 +116,10 @@ chooseAction h upd = do
   case upd of
     UnknownUpdate _ -> do
       lift $ logWarning (hLog h) ("There is UNKNOWN UPDATE. BOT WILL IGNORE IT\n")
-    Update {objectUpd = AboutObj {attachments = [Attachment {type' = _ }]}} -> do
+    Update {objectUpd = AboutObj {attachments = [PhotoAttachment {type' = _ }]}} -> do
       lift $ logWarning (hLog h) ("There is attachment update. BOT WILL IGNORE IT\n") 
-    _ -> do
-      let usId = extractUserId $ upd  
-      let msg = extractTextMsg $ upd
+    Update "message_new" (AboutObj usId id peerId txt [] []) -> do
+      let msg = txt
       lift $ logInfo (hLog h) ("Get msg " ++ show msg ++ " from user " ++ show usId ++ "\n")
       db <- gets snd
       case lookup usId db of 
@@ -142,7 +148,7 @@ chooseAction h upd = do
               lift $ checkSendMsgResponse h usId infoMsg response
         _ -> do
           let currN = case lookup usId db of { Just (Right n) -> n ; Nothing -> cStartN (hConf h) }
-          case msg of  
+          case filter ((/=) ' ') . T.unpack $ msg of  
             "/help" -> do
               let infoMsg = T.pack $ cHelpMsg (hConf h) 
               lift $ logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack infoMsg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
@@ -168,6 +174,46 @@ chooseAction h upd = do
                                     throwM $ DuringSendMsgException (Msg msg) (ToUserId usId) $ show (e :: SomeException))
                 logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
                 checkSendMsgResponse h usId msg response
+{-    Update "message_new" (AboutObj usId Id peerId txt [] attachs ) ->
+      fmap answerAttachment h attachs
+
+answerAttachment h usId (Attachment "photo" (Photo [])) = do
+  logError (hLog h) $ show e ++ "Send attachment message fail. Unknown photo response, empty sizes\n"    
+  throwM $ DuringSendMsgException (Msg "attachment") (ToUserId usId) $ "Send attachment message fail. Unknown photo response, empty sizes\n")
+answerAttachment h usId (Attachment "photo" (Photo sizes)) = do
+  let picUrl = url . head . reverse . sortOn height $ sizes
+  serRespJson <- getPhotoServer h usId
+  serUrl <- checkGetPhotoServResponse h serRespJson
+  manager <- newTlsManager
+  req1 <- parseRequest $ unpack picUrl
+  res  <- httpLbs req1 manager
+-}
+
+
+loadPhotoToServ' serUrl picUrl = do
+  manager <- newTlsManager
+  req1 <- parseRequest $ T.unpack picUrl
+  res  <- httpLbs req1 manager
+  let bs = LBS.toStrict . responseBody $ res
+  initReq2 <- parseRequest $ T.unpack serUrl
+  req2     <- (formDataBody [partFileRequestBody "photo" (T.unpack picUrl) $ RequestBodyBS bs]
+                initReq2)
+  httpLbs req2 manager
+
+{-loadPhotoToServ11 h serUrl picUrl = do
+  manager <- newTlsManager
+  req1 <- parseRequest $ T.unpack picUrl
+  res  <- httpLbs req1 manager
+  let bs = LBS.toStrict . responseBody $ res
+  (fP,hl) <- S.openTempFile "./" "pic.jpg"
+  S.hClose hl
+  BS.writeFile fP bs
+  S.hClose hl
+  initReq2 <- parseRequest $ T.unpack serUrl
+  req2     <- (formDataBody [partFileSource "photo" fP]
+                initReq2)
+  httpLbs req2 manager-}
+
 
 
 checkGetServResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m ()
@@ -255,6 +301,20 @@ getLongPollServer' h = do
   res <- httpLbs req manager
   return (responseBody res)
 
+getPhotoServer' :: Handle IO -> Int -> IO LBS.ByteString
+getPhotoServer' h usId = do
+  manager <- newTlsManager
+  req <- parseRequest $ "https://api.vk.com/method/photos.getMessagesUploadServer?peer_id=" ++ show usId ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
+  res <- httpLbs req manager
+  return (responseBody res)
+
+checkGetPhotoServResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m T.Text
+checkGetPhotoServResponse h json = do
+  case decode json of
+      Just (PhotoServerResponse serUrl) -> return serUrl
+      Nothing                      -> do
+        logError (hLog h) $ "UNKNOWN RESPONSE to getPhotoServer:\n" ++ show json
+        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
 
 getUpdates' :: T.Text -> T.Text -> T.Text -> IO LBS.ByteString
 getUpdates' key server ts = do

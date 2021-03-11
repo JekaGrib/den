@@ -33,6 +33,7 @@ dependencies:
 - time
 - hspec
 - exceptions
+- binary
 
 library:
   source-dirs: src

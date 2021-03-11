@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 847d94967c218c8eaec638e01c76603fe4d1e0acca483da6734d51a0489100ca
+-- hash: b0dfa4996ac84a08ee09fd990f236a8c854e8222d4b49205850b6a990848fac3
 
 name:           den
 version:        0.1.0.0
@@ -38,6 +38,7 @@ library
   build-depends:
       aeson
     , base >=4.7 && <5
+    , binary
     , bytestring
     , configurator
     , exceptions
@@ -61,6 +62,7 @@ executable den-exe
   build-depends:
       aeson
     , base >=4.7 && <5
+    , binary
     , bytestring
     , configurator
     , den
@@ -86,6 +88,7 @@ test-suite den-test
   build-depends:
       aeson
     , base >=4.7 && <5
+    , binary
     , bytestring
     , configurator
     , den

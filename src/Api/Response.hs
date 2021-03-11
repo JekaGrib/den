@@ -30,44 +30,54 @@ instance FromJSON Answer where
 
 data Update 
   = Update {typeUpd :: T.Text,
-            objectUpd  :: AboutObj,
-            group_id  :: Int,
-            event_id  :: T.Text} 
+            objectUpd  :: AboutObj} 
   | UnknownUpdate  {typeUpdate :: T.Text} deriving (Generic, Show)
 
 instance FromJSON Update where
     parseJSON (Object v) = (Update
         <$> v .: "type"
-        <*> v .: "object"
-        <*> v .: "group_id"
-        <*> v .: "event_id") <|> (UnknownUpdate 
+        <*> v .: "object") <|> (UnknownUpdate 
         <$> v .: "type")
 
 
-
 data AboutObj = AboutObj {
-      date :: Int
-    , from_id  :: Int
+      from_id  :: Int
     , id  :: Int
-    , out  :: Int
     , peer_id  :: Int
     , text  :: T.Text
-    , conversation_message_id :: Int
     , fwd_messages :: [Int]
-    , important :: Bool
-    , random_id :: Int
     , attachments :: [Attachment]
-    , is_hidden :: Bool
     } deriving (Generic, Show)
 
 instance FromJSON AboutObj
 
-data Attachment = Attachment {
-      type' :: T.Text } deriving (Generic, Show)
+data Attachment 
+    = PhotoAttachment 
+      { type' :: T.Text
+      , photo :: Photo }
+     deriving (Generic, Show)
 
 instance FromJSON Attachment where
-    parseJSON = withObject "Attachment" $ \v -> Attachment
+    parseJSON (Object v) = (PhotoAttachment
         <$> v .: "type"
+        <*> v .: "photo") 
+
+
+
+
+data Photo = Photo {
+      size :: [Size]
+    } deriving (Generic, Show)
+
+instance FromJSON Photo
+
+data Size = Size {
+      height :: Integer
+    , width :: Integer
+    , url :: T.Text
+    } deriving (Generic, Show)
+
+instance FromJSON Size
 
 data GetPollServerJSONBody 
     = GetPollServerJSONBody { response :: ServerInfo} 
@@ -104,3 +114,6 @@ data ErrorInfo = ErrorInfo { error_code :: Int} deriving (Generic, Show)
 
 instance FromJSON ErrorInfo
 
+data PhotoServerResponse = PhotoServerResponse {upload_url :: T.Text} deriving (Generic, Show)
+
+instance FromJSON PhotoServerResponse
