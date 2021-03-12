@@ -26,7 +26,6 @@ dependencies:
 - text
 - http-client
 - http-client-tls
-- req
 - aeson
 - configurator
 - mtl

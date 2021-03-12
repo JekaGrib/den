@@ -7,9 +7,8 @@ module App where
 import           Logger
 import           Api.Response
 import           Api.Request
-import           Network.HTTP.Client            ( withResponse, responseClose, brConsume, responseOpen, parseRequest, responseBody, httpLbs, method, requestBody, requestHeaders, RequestBody(..) )
+import           Network.HTTP.Client            ( urlEncodedBody, parseRequest, responseBody, httpLbs, method, requestBody, requestHeaders, RequestBody(..) )
 import           Network.HTTP.Client.TLS        (newTlsManager)
-import qualified Network.HTTP.Req               as R
 import qualified Data.ByteString.Lazy           as LBS
 import qualified Data.ByteString                as BS
 import           Data.Aeson
@@ -24,6 +23,9 @@ import qualified Control.Exception              as E
 import           Network.HTTP.Client.MultipartFormData
 import           Data.Binary.Builder
 import qualified System.IO                      as S
+import           Data.String                    ( fromString )
+
+
 
 
 data Msg           = Msg        T.Text            deriving (Eq,Show)
@@ -332,6 +334,21 @@ sendMsg' h usId msg = do
 
 sendKeyb' :: Handle IO -> Int -> Int -> T.Text -> IO LBS.ByteString
 sendKeyb' h usId n msg = do
+  manager <- newTlsManager
+  initReq <- parseRequest $ "https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack msg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
+  let param1 = ("user_id"     , fromString . show $ usId) 
+  let param2 = ("random_id"   ,"0")
+  let param3 = ("message"     , fromString (show  n ++ T.unpack msg))
+  let param4 = ("keyboard"    , LBS.toStrict . encode $ kB)
+  let param5 = ("access_token", fromString (cBotToken $ (hConf h))) 
+  let param6 = ("v"           ,"5.103")
+  let params = param1 : param2 : param3 : param4 : param5 : param6 : [] 
+  let req = urlEncodedBody params initReq
+  res <- httpLbs req manager
+  return (responseBody res)
+
+{-sendKeyb' :: Handle IO -> Int -> Int -> T.Text -> IO LBS.ByteString
+sendKeyb' h usId n msg = do
   let keyB = "{\"one_time\":true,\"buttons\":[[{\"action\":{\"type\":\"text\",\"label\":\"1\"},\"color\":\"positive\"}],[{\"action\":{\"type\":\"text\",\"label\":\"2\"},\"color\":\"positive\"}],[{\"action\":{\"type\":\"text\",\"label\":\"3\"},\"color\":\"positive\"}],[{\"action\":{\"type\":\"text\",\"label\":\"4\"},\"color\":\"positive\"}],[{\"action\":{\"type\":\"text\",\"label\":\"5\"},\"color\":\"positive\"}]],\"inline\":false}"
   let hT = R.https "api.vk.com" R./: "method" R./: "messages.send"
   let param1 = "user_id"      R.=: usId
@@ -343,12 +360,12 @@ sendKeyb' h usId n msg = do
   let params = param1 <> param2 <> param3 <> param4 <> param5 <> param6 
   let body = R.ReqBodyUrlEnc params
   res <- R.req R.POST hT body R.lbsResponse mempty
-  return (R.responseBody res) 
+  return (R.responseBody res) -}
 
 --req <- parseRequest $ "https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ show n ++ T.unpack msg ++ "&keyboard=" ++ keyB ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
 
-instance R.MonadHttp IO where
-  handleHttpException e =  fail ""
+{-instance R.MonadHttp IO where
+  handleHttpException e =  fail ""-}
 
 --my :: IO R.LbsResponse
 --my = R.req R.POST hT body R.lbsResponse mempty

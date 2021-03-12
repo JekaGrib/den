@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: b0dfa4996ac84a08ee09fd990f236a8c854e8222d4b49205850b6a990848fac3
+-- hash: 4ec280b5edf849630bc044dad0d66bb2931b7d55892cfdb52ddce66a7aa38aa9
 
 name:           den
 version:        0.1.0.0
@@ -47,7 +47,6 @@ library
     , http-client-tls
     , lens
     , mtl
-    , req
     , text
     , time
   default-language: Haskell2010
@@ -72,7 +71,6 @@ executable den-exe
     , http-client-tls
     , lens
     , mtl
-    , req
     , text
     , time
   default-language: Haskell2010
@@ -98,7 +96,6 @@ test-suite den-test
     , http-client-tls
     , lens
     , mtl
-    , req
     , text
     , time
   default-language: Haskell2010
