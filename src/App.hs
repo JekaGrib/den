@@ -54,7 +54,11 @@ data Handle m = Handle
     getLongPollServer :: m LBS.ByteString,
     getUpdates        :: T.Text -> T.Text -> T.Text -> m LBS.ByteString,
     sendMsg           :: Int -> T.Text -> m LBS.ByteString,
-    sendKeyb          :: Int -> Int -> T.Text -> m LBS.ByteString
+    sendKeyb          :: Int -> Int -> T.Text -> m LBS.ByteString,
+    getPhotoServer    :: Int -> m LBS.ByteString,
+    loadPhotoToServ   :: T.Text -> T.Text -> m LBS.ByteString,
+    savePhotoOnServ   :: LoadPhotoResp -> m LBS.ByteString,
+    sendMsgWithAttach :: Int -> T.Text -> [String] -> m LBS.ByteString
     }
 
 data Config = Config 
@@ -115,19 +119,15 @@ runServ h = do
 chooseAction :: (Monad m, MonadCatch m) => Handle m -> Update -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m ()
 chooseAction h upd = do
   lift $ logInfo (hLog h) ("Analysis update from the list\n")
-  case upd of
-    UnknownUpdate _ -> do
-      lift $ logWarning (hLog h) ("There is UNKNOWN UPDATE. BOT WILL IGNORE IT\n")
-    Update {objectUpd = AboutObj {attachments = [PhotoAttachment {type' = _ }]}} -> do
-      lift $ logWarning (hLog h) ("There is attachment update. BOT WILL IGNORE IT\n") 
-    Update "message_new" (AboutObj usId id peerId txt [] []) -> do
+  case upd of   
+    Update "message_new" obj@(AboutObj usId id peerId txt fwds attachs) -> do
       let msg = txt
       lift $ logInfo (hLog h) ("Get msg " ++ show msg ++ " from user " ++ show usId ++ "\n")
       db <- gets snd
       case lookup usId db of 
         Just (Left (OpenRepeat oldN)) -> do
           lift $ logInfo (hLog h) ("User " ++ show usId ++ " is in OpenRepeat mode\n")
-          case checkButton msg of
+          case checkButton obj of
             Just newN -> do
               lift $ logInfo (hLog h) ("Change number of repeats to " ++ show newN ++ " for user " ++ show usId ++ "\n")
               modify $ func $ changeDB usId $ Right newN
@@ -150,57 +150,105 @@ chooseAction h upd = do
               lift $ checkSendMsgResponse h usId infoMsg response
         _ -> do
           let currN = case lookup usId db of { Just (Right n) -> n ; Nothing -> cStartN (hConf h) }
-          case filter ((/=) ' ') . T.unpack $ msg of  
-            "/help" -> do
-              let infoMsg = T.pack $ cHelpMsg (hConf h) 
-              lift $ logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack infoMsg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
-              response <- lift $ sendMsg h usId infoMsg `catch` (\e -> do
-                                    logError (hLog h) $ show e ++ " SendMessage fail\n"    
-                                    throwM $ DuringSendMsgException (Msg infoMsg) (ToUserId usId) $ show (e :: SomeException))
-              lift $ logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
-              lift $ checkSendMsgResponse h usId infoMsg response
-            "/repeat" -> do
-              let infoMsg = T.pack $ " : Current number of repeats your message.\n" ++ cRepeatQ (hConf h)
-              lift $ logDebug (hLog h) $ "Send request to send keyboard: https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ show currN ++ T.unpack infoMsg ++ "&keyboard=default_keyboard&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
-              response <- lift $ sendKeyb h usId currN infoMsg `catch` (\e -> do
-                                          logError (hLog h) $ show e ++ " SendKeyb fail\n" 
-                                          throwM $ DuringSendKeybException (ToUserId usId) $ show (e :: SomeException))
-              lift $ logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
-              lift $ checkSendKeybResponse h usId currN infoMsg response
-              modify $ func $ changeDB usId $ Left $ OpenRepeat currN 
-            _ -> do 
-              lift $ replicateM_ currN $ do
-                logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack msg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
-                response <- sendMsg h usId msg `catch` (\e -> do
-                                    logError (hLog h) $ show e ++ " SendMessage fail\n"    
-                                    throwM $ DuringSendMsgException (Msg msg) (ToUserId usId) $ show (e :: SomeException))
-                logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
-                checkSendMsgResponse h usId msg response
-{-    Update "message_new" (AboutObj usId Id peerId txt [] attachs ) ->
-      fmap answerAttachment h attachs
+          case obj of
+            AboutObj usId id peerId txt [] [] -> do
+              chooseActionOfTxt h currN usId txt
+            AboutObj usId id peerId txt fwds attachs -> do
+              attachStrings <- lift $ mapM (answerAttachment h usId) attachs
+              lift $ replicateM_ currN $ do 
+                response <- sendMsgWithAttach h usId txt attachStrings
+                checkSendMsgResponse h usId txt response     
+    _ -> do
+      lift $ logWarning (hLog h) ("There is UNKNOWN UPDATE. BOT WILL IGNORE IT. " ++ show upd ++ "\n")
 
-answerAttachment h usId (Attachment "photo" (Photo [])) = do
-  logError (hLog h) $ show e ++ "Send attachment message fail. Unknown photo response, empty sizes\n"    
-  throwM $ DuringSendMsgException (Msg "attachment") (ToUserId usId) $ "Send attachment message fail. Unknown photo response, empty sizes\n")
-answerAttachment h usId (Attachment "photo" (Photo sizes)) = do
+chooseActionOfTxt :: (Monad m, MonadCatch m) => Handle m -> Int -> Int -> T.Text -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m ()
+chooseActionOfTxt h currN usId msg = case filter ((/=) ' ') . T.unpack $ msg of
+  "/help" -> do
+    let infoMsg = T.pack $ cHelpMsg (hConf h) 
+    lift $ logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack infoMsg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
+    response <- lift $ sendMsg h usId infoMsg `catch` (\e -> do
+                          logError (hLog h) $ show e ++ " SendMessage fail\n"    
+                          throwM $ DuringSendMsgException (Msg infoMsg) (ToUserId usId) $ show (e :: SomeException))
+    lift $ logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
+    lift $ checkSendMsgResponse h usId infoMsg response
+  "/repeat" -> do
+    let infoMsg = T.pack $ " : Current number of repeats your message.\n" ++ cRepeatQ (hConf h)
+    lift $ logDebug (hLog h) $ "Send request to send keyboard: https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ show currN ++ T.unpack infoMsg ++ "&keyboard=default_keyboard&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
+    response <- lift $ sendKeyb h usId currN infoMsg `catch` (\e -> do
+                                logError (hLog h) $ show e ++ " SendKeyb fail\n" 
+                                throwM $ DuringSendKeybException (ToUserId usId) $ show (e :: SomeException))
+    lift $ logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
+    lift $ checkSendKeybResponse h usId currN infoMsg response
+    modify $ func $ changeDB usId $ Left $ OpenRepeat currN 
+  _ -> do 
+    lift $ replicateM_ currN $ do
+      logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack msg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
+      response <- sendMsg h usId msg `catch` (\e -> do
+                          logError (hLog h) $ show e ++ " SendMessage fail\n"    
+                          throwM $ DuringSendMsgException (Msg msg) (ToUserId usId) $ show (e :: SomeException))
+      logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
+      checkSendMsgResponse h usId msg response
+
+{-    Update {objectUpd = AboutObj {attachments = [PhotoAttachment {type' = _ }]}} -> do
+      lift $ logWarning (hLog h) ("There is attachment update. BOT WILL IGNORE IT\n") 
+UnknownUpdate _ -> do
+      lift $ logWarning (hLog h) ("There is UNKNOWN UPDATE. BOT WILL IGNORE IT\n") -}
+
+answerAttachment :: (Monad m, MonadCatch m) => Handle m -> Int -> Attachment -> m String
+answerAttachment h usId (PhotoAttachment "photo" (Photo [])) = do
+  logError (hLog h) $ "Send attachment message fail. Unknown photo response, empty sizes\n"    
+  throwM $ DuringSendMsgException (Msg "attachment") (ToUserId usId) $ "Send attachment message fail. Unknown photo response, empty sizes\n"
+answerAttachment h usId (PhotoAttachment "photo" (Photo sizes)) = do
   let picUrl = url . head . reverse . sortOn height $ sizes
   serRespJson <- getPhotoServer h usId
   serUrl <- checkGetPhotoServResponse h serRespJson
-  manager <- newTlsManager
-  req1 <- parseRequest $ unpack picUrl
-  res  <- httpLbs req1 manager
--}
+  loadPhotoJson <- loadPhotoToServ h serUrl picUrl
+  loadPhotoResp <- checkLoadPhotoResponse h loadPhotoJson
+  savePhotoJson <- savePhotoOnServ h loadPhotoResp
+  (PhotoInfo id owner_id ac_key) <- checkSavePhotoResponse h savePhotoJson
+  return $ "photo" ++ show owner_id ++ "_" ++ show id ++ "_" ++ ac_key
 
-
+loadPhotoToServ' :: T.Text -> T.Text -> IO LBS.ByteString
 loadPhotoToServ' serUrl picUrl = do
   manager <- newTlsManager
   req1 <- parseRequest $ T.unpack picUrl
-  res  <- httpLbs req1 manager
-  let bs = LBS.toStrict . responseBody $ res
+  res1  <- httpLbs req1 manager
+  let bs = LBS.toStrict . responseBody $ res1
   initReq2 <- parseRequest $ T.unpack serUrl
   req2     <- (formDataBody [partFileRequestBody "photo" (T.unpack picUrl) $ RequestBodyBS bs]
                 initReq2)
-  httpLbs req2 manager
+  res2<- httpLbs req2 manager
+  return (responseBody res2)
+
+checkLoadPhotoResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m LoadPhotoResp
+checkLoadPhotoResponse h json = do
+  case decode json of
+      Just loadPhotoResp@(LoadPhotoResp server hash photo) -> return loadPhotoResp
+      _                      -> do
+        logError (hLog h) $ "UNKNOWN RESPONSE to loadPhotoToServer:\n" ++ show json
+        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
+
+savePhotoOnServ' :: Handle IO -> LoadPhotoResp -> IO LBS.ByteString
+savePhotoOnServ' h (LoadPhotoResp server hash photo) = do
+  manager <- newTlsManager
+  initReq <- parseRequest $ "https://api.vk.com/method/photos.saveMessagesPhoto"
+  let param1 = ("server"      , fromString . show $ server) 
+  let param2 = ("hash"        , fromString hash)
+  let param3 = ("photo"       , fromString photo)
+  let param4 = ("access_token", fromString (cBotToken $ (hConf h))) 
+  let param5 = ("v"           ,"5.103")
+  let params = param1 : param2 : param3 : param4 : param5 : [] 
+  let req = urlEncodedBody params initReq
+  res <- httpLbs req manager
+  return (responseBody res)
+
+checkSavePhotoResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m PhotoInfo
+checkSavePhotoResponse h json = do
+  case decode json of
+      Just savePhotoResp@(SavePhotoResp [PhotoInfo id ownerId ac_key]) -> return (PhotoInfo id ownerId ac_key)
+      _                      -> do
+        logError (hLog h) $ "UNKNOWN RESPONSE to savePhotoOnServer:\n" ++ show json
+        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
 
 {-loadPhotoToServ11 h serUrl picUrl = do
   manager <- newTlsManager
@@ -313,8 +361,8 @@ getPhotoServer' h usId = do
 checkGetPhotoServResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m T.Text
 checkGetPhotoServResponse h json = do
   case decode json of
-      Just (PhotoServerResponse serUrl) -> return serUrl
-      Nothing                      -> do
+      Just (PhotoServerResponse (UploadUrl serUrl)) -> return serUrl
+      _                      -> do
         logError (hLog h) $ "UNKNOWN RESPONSE to getPhotoServer:\n" ++ show json
         throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
 
@@ -332,10 +380,17 @@ sendMsg' h usId msg = do
   res <- httpLbs req manager
   return (responseBody res)
 
+sendMsgWithAttach' :: Handle IO -> Int -> T.Text -> [String] -> IO LBS.ByteString
+sendMsgWithAttach' h usId msg attachStrs = do
+  manager <- newTlsManager
+  req <- parseRequest $ "https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack msg ++ "&attachment=" ++ intercalate "," attachStrs ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
+  res <- httpLbs req manager
+  return (responseBody res)
+
 sendKeyb' :: Handle IO -> Int -> Int -> T.Text -> IO LBS.ByteString
 sendKeyb' h usId n msg = do
   manager <- newTlsManager
-  initReq <- parseRequest $ "https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack msg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
+  initReq <- parseRequest $ "https://api.vk.com/method/messages.send"
   let param1 = ("user_id"     , fromString . show $ usId) 
   let param2 = ("random_id"   ,"0")
   let param3 = ("message"     , fromString (show  n ++ T.unpack msg))
@@ -347,40 +402,18 @@ sendKeyb' h usId n msg = do
   res <- httpLbs req manager
   return (responseBody res)
 
-{-sendKeyb' :: Handle IO -> Int -> Int -> T.Text -> IO LBS.ByteString
-sendKeyb' h usId n msg = do
-  let keyB = "{\"one_time\":true,\"buttons\":[[{\"action\":{\"type\":\"text\",\"label\":\"1\"},\"color\":\"positive\"}],[{\"action\":{\"type\":\"text\",\"label\":\"2\"},\"color\":\"positive\"}],[{\"action\":{\"type\":\"text\",\"label\":\"3\"},\"color\":\"positive\"}],[{\"action\":{\"type\":\"text\",\"label\":\"4\"},\"color\":\"positive\"}],[{\"action\":{\"type\":\"text\",\"label\":\"5\"},\"color\":\"positive\"}]],\"inline\":false}"
-  let hT = R.https "api.vk.com" R./: "method" R./: "messages.send"
-  let param1 = "user_id"      R.=: usId
-  let param2 = "random_id"    R.=: (0 :: Int)
-  let param3 = "message"      R.=: (show  n ++ T.unpack msg)
-  let param4 = "keyboard"     R.=: (keyB :: T.Text)
-  let param5 = "access_token" R.=: (T.pack . cBotToken $ (hConf h)) 
-  let param6 = "v"            R.=: ("5.103" :: T.Text)
-  let params = param1 <> param2 <> param3 <> param4 <> param5 <> param6 
-  let body = R.ReqBodyUrlEnc params
-  res <- R.req R.POST hT body R.lbsResponse mempty
-  return (R.responseBody res) -}
-
---req <- parseRequest $ "https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ show n ++ T.unpack msg ++ "&keyboard=" ++ keyB ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
-
-{-instance R.MonadHttp IO where
-  handleHttpException e =  fail ""-}
-
---my :: IO R.LbsResponse
---my = R.req R.POST hT body R.lbsResponse mempty
 
 extractUpdates :: LBS.ByteString -> [Update]
 extractUpdates = updates . fromJust . decode 
 
 extractTs :: LBS.ByteString -> T.Text
-extractTs = ts . fromJust . decode
+extractTs = tsSI . fromJust . decode
 
 extractKey :: LBS.ByteString -> T.Text
 extractKey = key . response . fromJust . decode
 
 extractServ :: LBS.ByteString -> T.Text
-extractServ = server . response . fromJust . decode
+extractServ = serverSI . response . fromJust . decode
 
 extractTextMsg :: Update -> T.Text
 extractTextMsg = text . objectUpd 
@@ -403,8 +436,15 @@ changeDB usId eitherN bd =
         Just eitherX -> (:) (usId,eitherN) . delete (usId, eitherX) $ bd
         Nothing -> (:) (usId,eitherN) $ bd
 
-checkButton :: T.Text -> Maybe Int
-checkButton text =
+
+checkButton :: AboutObj -> Maybe Int
+checkButton obj =
+  case obj of
+    AboutObj usId id peerId txt [] [] -> checkTextButton txt
+    _  -> Nothing
+
+checkTextButton :: T.Text -> Maybe Int
+checkTextButton text =
     case text of 
       { "1" -> Just 1 ; "2" -> Just 2 ; "3" -> Just 3 ; "4" -> Just 4 ; "5" -> Just 5 ; _ -> Nothing }
 
