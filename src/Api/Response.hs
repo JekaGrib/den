@@ -31,12 +31,14 @@ instance FromJSON Answer where
 data Update 
   = Update {typeUpd :: T.Text,
             objectUpd  :: AboutObj
-            } deriving ( Show)
+            } 
+    | UnknownUpdate Object 
+       deriving ( Show)
 
 instance FromJSON Update where
-    parseJSON (Object v) = Update
+    parseJSON  (Object v) = (Update
         <$> v .: "type"
-        <*> v .: "object"
+        <*> v .: "object") <|> (UnknownUpdate  <$> parseJSON (Object v))
 
 
 data AboutObj = AboutObj {
@@ -44,7 +46,7 @@ data AboutObj = AboutObj {
     , id  :: Int
     , peer_id  :: Int
     , text  :: T.Text
-    , fwd_messages :: [Int]
+    , fwd_messages :: [Object]
     , attachments :: [Attachment]
     } deriving (Generic, Show)
 
@@ -54,15 +56,50 @@ data Attachment
     = PhotoAttachment 
       { type' :: T.Text
       , photoPA :: Photo }
+    | DocAttachment
+      { type' :: T.Text
+      , docDA :: Doc }
+    | AudioMesAttachment
+      { type' :: T.Text
+      , audio_message :: Audio }
+    | VideoAttachment
+      { type' :: T.Text
+      , docVA :: DocInfo }
+    | StickerAttachment
+      { type' :: T.Text
+      , sticker :: StickerInfo }
+    | UnknownAttachment Object 
      deriving (Generic, Show)
 
 instance FromJSON Attachment where
     parseJSON (Object v) = (PhotoAttachment
         <$> v .: "type"
-        <*> v .: "photo") 
+        <*> v .: "photo") <|> (DocAttachment
+        <$> v .: "type"
+        <*> v .: "doc") <|> (AudioMesAttachment
+        <$> v .: "type"
+        <*> v .: "audio_message") <|> (VideoAttachment
+        <$> v .: "type"
+        <*> v .: "video") <|> (UnknownAttachment  <$> parseJSON (Object v))
 
+data Doc 
+    = Doc{
+        urlD   :: T.Text
+       , ext   :: String
+       , title :: String
+    } deriving (Show)
 
+instance FromJSON Doc where
+    parseJSON (Object v) = Doc
+        <$> v .: "url"
+        <*> v .: "ext"
+        <*> v .: "title"
 
+data Audio = Audio {
+      link_ogg :: T.Text
+    } deriving (Generic, Show)
+
+instance FromJSON Audio
 
 data Photo = Photo {
       sizes :: [Size]
@@ -78,6 +115,12 @@ data Size = Size {
 
 instance FromJSON Size
 
+data LoadDocResp = LoadDocResp {
+      file :: String
+    } deriving (Generic, Show)
+
+instance FromJSON LoadDocResp
+
 data LoadPhotoResp = LoadPhotoResp {
       server :: Int
     , hash :: String
@@ -86,14 +129,14 @@ data LoadPhotoResp = LoadPhotoResp {
 
 instance FromJSON LoadPhotoResp
 
-data SavePhotoResp = SavePhotoResp {responseSPR :: [PhotoInfo]} deriving (Generic, Show)
+data SavePhotoResp = SavePhotoResp {responseSPR :: [DocInfo]} deriving (Generic, Show)
 
 instance FromJSON SavePhotoResp where
     parseJSON (Object v) = SavePhotoResp
         <$> v .: "response"
 
 data PhotoInfo = PhotoInfo {
-      idSPR :: Int
+      idPI :: Int
     , owner_id :: Int
     , access_key :: String
     } deriving (Generic, Show)
@@ -103,6 +146,69 @@ instance FromJSON PhotoInfo where
         <$> v .: "id"
         <*> v .: "owner_id"
         <*> v .: "access_key"
+
+data AudioMesInfo = AudioMesInfo {
+      idAMI :: Int
+    , owner_idAMI :: Int
+    , access_keyAMI :: String
+    } deriving (Generic, Show)
+
+instance FromJSON AudioMesInfo where
+      parseJSON (Object v) = AudioMesInfo
+        <$> v .: "id"
+        <*> v .: "owner_id"
+        <*> v .: "access_key"
+
+data StickerInfo = StickerInfo {
+      sticker_id :: Int
+    } deriving (Generic, Show)
+
+instance FromJSON StickerInfo
+
+data SaveDocResp = SaveDocResp {responseSDR :: ResponseSDR} deriving (Generic, Show)
+
+instance FromJSON SaveDocResp where
+    parseJSON (Object v) = SaveDocResp
+        <$> v .: "response"
+
+data ResponseSDR = ResponseSDR {
+      typeRSDR :: T.Text
+    , docRSDR  :: DocInfo
+    } deriving (Generic, Show)
+
+instance FromJSON ResponseSDR where
+    parseJSON (Object v) = ResponseSDR
+        <$> v .: "type"
+        <*> v .: "doc"
+
+data DocInfo = DocInfo {
+      idDI :: Int
+    , owner_idDI :: Int
+    } deriving (Generic, Show)
+
+instance FromJSON DocInfo where
+      parseJSON (Object v) = DocInfo
+        <$> v .: "id"
+        <*> v .: "owner_id"
+
+data SaveDocAuMesResp = SaveDocAuMesResp {responseSDAMR :: ResponseSDAMR} deriving (Generic, Show)
+
+instance FromJSON SaveDocAuMesResp where
+    parseJSON (Object v) = SaveDocAuMesResp
+        <$> v .: "response"
+
+data ResponseSDAMR = ResponseSDAMR {
+      typeSDAMR :: T.Text
+    , docSDAMR  :: DocInfo
+    } deriving (Generic, Show)
+
+instance FromJSON ResponseSDAMR where
+    parseJSON (Object v) = ResponseSDAMR
+        <$> v .: "type"
+        <*> v .: "audio_message"
+
+
+
 
 
 data GetPollServerJSONBody 
@@ -140,10 +246,10 @@ data ErrorInfo = ErrorInfo { error_code :: Int} deriving (Generic, Show)
 
 instance FromJSON ErrorInfo
 
-data PhotoServerResponse = PhotoServerResponse {responsePSR :: UploadUrl} deriving (Generic, Show)
+data UploadServerResponse = UploadServerResponse {responsePSR :: UploadUrl} deriving (Generic, Show)
 
-instance FromJSON PhotoServerResponse where
-    parseJSON (Object v) = PhotoServerResponse
+instance FromJSON UploadServerResponse where
+    parseJSON (Object v) = UploadServerResponse
         <$> v .: "response"
 
 data UploadUrl = UploadUrl {upload_url :: T.Text} deriving (Generic, Show)

@@ -41,7 +41,7 @@ main = do
   groupId        <- parseConfGroupId  conf 
   let config = Config startN botToken helpMsg repeatQuestion groupId
   let handleLog = LogHandle (LogConfig prio) (logger handleLog currLogPath)
-  let handle = Handle config handleLog (getLongPollServer' handle) getUpdates' (sendMsg' handle) (sendKeyb' handle) (getPhotoServer' handle) loadPhotoToServ' (savePhotoOnServ' handle) (sendMsgWithAttach' handle)
+  let handle = Handle config handleLog (getLongPollServer' handle) getUpdates' (sendMsg' handle) (sendKeyb' handle) (getPhotoServer' handle) loadPhotoToServ' (savePhotoOnServ' handle) (getDocServer' handle) loadDocToServ' (saveDocOnServ' handle) (sendMsgWithAttach' handle)
   putStrLn "App started"
   evalStateT (forever $ run handle) (ServerInfo "A" "A" "1" ,[])
   

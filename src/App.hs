@@ -58,6 +58,9 @@ data Handle m = Handle
     getPhotoServer    :: Int -> m LBS.ByteString,
     loadPhotoToServ   :: T.Text -> T.Text -> m LBS.ByteString,
     savePhotoOnServ   :: LoadPhotoResp -> m LBS.ByteString,
+    getDocServer      :: Int -> String -> m LBS.ByteString,
+    loadDocToServ     :: T.Text -> T.Text -> String -> m LBS.ByteString,
+    saveDocOnServ     :: LoadDocResp -> String -> m LBS.ByteString,
     sendMsgWithAttach :: Int -> T.Text -> [String] -> m LBS.ByteString
     }
 
@@ -153,11 +156,19 @@ chooseAction h upd = do
           case obj of
             AboutObj usId id peerId txt [] [] -> do
               chooseActionOfTxt h currN usId txt
+            AboutObj usId id peerId txt [] attachs -> do
+              eitherAttachStrings <- lift $ mapM (answerAttachment h usId) attachs
+              case sequence eitherAttachStrings of
+                Right attachStrings -> do
+                  lift $ replicateM_ currN $ do 
+                    response <- sendMsgWithAttach h usId txt attachStrings
+                    checkSendMsgResponse h usId txt response
+                Left str ->
+                  lift $ logWarning (hLog h) ("There is UNKNOWN ATTACMENT in updateList. BOT WILL IGNORE IT. " ++ show attachs ++ "\n")     
             AboutObj usId id peerId txt fwds attachs -> do
-              attachStrings <- lift $ mapM (answerAttachment h usId) attachs
-              lift $ replicateM_ currN $ do 
-                response <- sendMsgWithAttach h usId txt attachStrings
-                checkSendMsgResponse h usId txt response     
+              lift $ logWarning (hLog h) ("There is forward message. BOT WILL IGNORE IT. " ++ show upd ++ "\n")
+    UnknownUpdate _ -> do
+      lift $ logWarning (hLog h) ("There is UNKNOWN UPDATE. BOT WILL IGNORE IT. " ++ show upd ++ "\n")
     _ -> do
       lift $ logWarning (hLog h) ("There is UNKNOWN UPDATE. BOT WILL IGNORE IT. " ++ show upd ++ "\n")
 
@@ -194,19 +205,90 @@ chooseActionOfTxt h currN usId msg = case filter ((/=) ' ') . T.unpack $ msg of
 UnknownUpdate _ -> do
       lift $ logWarning (hLog h) ("There is UNKNOWN UPDATE. BOT WILL IGNORE IT\n") -}
 
-answerAttachment :: (Monad m, MonadCatch m) => Handle m -> Int -> Attachment -> m String
+answerAttachment :: (Monad m, MonadCatch m) => Handle m -> Int -> Attachment -> m (Either String String)
 answerAttachment h usId (PhotoAttachment "photo" (Photo [])) = do
   logError (hLog h) $ "Send attachment message fail. Unknown photo response, empty sizes\n"    
   throwM $ DuringSendMsgException (Msg "attachment") (ToUserId usId) $ "Send attachment message fail. Unknown photo response, empty sizes\n"
 answerAttachment h usId (PhotoAttachment "photo" (Photo sizes)) = do
   let picUrl = url . head . reverse . sortOn height $ sizes
   serRespJson <- getPhotoServer h usId
-  serUrl <- checkGetPhotoServResponse h serRespJson
+  serUrl <- checkGetUploadServResponse h serRespJson
   loadPhotoJson <- loadPhotoToServ h serUrl picUrl
   loadPhotoResp <- checkLoadPhotoResponse h loadPhotoJson
   savePhotoJson <- savePhotoOnServ h loadPhotoResp
-  (PhotoInfo id owner_id ac_key) <- checkSavePhotoResponse h savePhotoJson
-  return $ "photo" ++ show owner_id ++ "_" ++ show id ++ "_" ++ ac_key
+  (DocInfo id owner_id) <- checkSavePhotoResponse h savePhotoJson
+  return $ Right $ "photo" ++ show owner_id ++ "_" ++ show id 
+answerAttachment h usId (DocAttachment "doc" (Doc docUrl ext title)) = do
+  serRespJson <- getDocServer h usId "doc"
+  serUrl <- checkGetUploadServResponse h serRespJson
+  loadDocJson <- loadDocToServ h serUrl docUrl ext
+  loadDocResp <- checkLoadDocResponse h loadDocJson
+  saveDocJson <- saveDocOnServ h loadDocResp title
+  (DocInfo id owner_id) <- checkSaveDocResponse h saveDocJson
+  return $ Right $ "doc" ++ show owner_id ++ "_" ++ show id 
+answerAttachment h usId (AudioMesAttachment "audio_message" (Audio docUrl)) = do
+  serRespJson <- getDocServer h usId "audio_message"
+  serUrl <- checkGetUploadServResponse h serRespJson
+  loadDocJson <- loadDocToServ h serUrl docUrl "ogg"
+  loadDocResp <- checkLoadDocResponse h loadDocJson
+  saveDocJson <- saveDocOnServ h loadDocResp "audio_message"
+  (DocInfo id owner_id) <- checkSaveDocAuMesResponse h saveDocJson
+  return $ Right $ "doc" ++ show owner_id ++ "_" ++ show id
+answerAttachment h usId (VideoAttachment "video" (DocInfo id owner_id)) = do
+  return $ Right $ "video" ++ show owner_id ++ "_" ++ show id 
+answerAttachment h usId (StickerAttachment "sticker" (StickerInfo id)) = 
+  return $ Right $ "doc" ++ show id ++ "_" ++ show id 
+answerAttachment h usId (UnknownAttachment _) = return $ Left "unknown attachment"
+
+
+loadDocToServ' :: T.Text -> T.Text -> String -> IO LBS.ByteString
+loadDocToServ' serUrl docUrl ext = do
+  manager <- newTlsManager
+  req1 <- parseRequest $ T.unpack docUrl
+  res1  <- httpLbs req1 manager
+  let bs = LBS.toStrict . responseBody $ res1
+  initReq2 <- parseRequest $ T.unpack serUrl
+  req2     <- (formDataBody [partFileRequestBody "file" (T.unpack docUrl ++ " file." ++ ext) $ RequestBodyBS bs]
+                initReq2)
+  res2<- httpLbs req2 manager
+  return (responseBody res2)
+
+checkLoadDocResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m LoadDocResp
+checkLoadDocResponse h json = do
+  case decode json of
+      Just loadDocResp@(LoadDocResp file) -> return loadDocResp
+      _                      -> do
+        logError (hLog h) $ "UNKNOWN RESPONSE to loadDocToServer:\n" ++ show json
+        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
+
+saveDocOnServ' :: Handle IO -> LoadDocResp -> String -> IO LBS.ByteString
+saveDocOnServ' h (LoadDocResp file) title = do
+  manager <- newTlsManager
+  initReq <- parseRequest $ "https://api.vk.com/method/docs.save"
+  let param1 = ("file"        , fromString file)
+  let param2 = ("title"       , fromString title)
+  let param3 = ("access_token", fromString (cBotToken $ (hConf h))) 
+  let param4 = ("v"           ,"5.103")
+  let params = param1 : param2 : param3 : param4 : []   
+  let req = urlEncodedBody params initReq
+  res <- httpLbs req manager
+  return (responseBody res)
+
+checkSaveDocResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m DocInfo
+checkSaveDocResponse h json = do
+  case decode json of
+      Just (SaveDocResp (ResponseSDR "doc" (DocInfo id ownerId) )) -> return (DocInfo id ownerId)
+      _                      -> do
+        logError (hLog h) $ "UNKNOWN RESPONSE to saveDocOnServer:\n" ++ show json
+        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
+
+checkSaveDocAuMesResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m DocInfo
+checkSaveDocAuMesResponse h json = do
+  case decode json of
+      Just (SaveDocAuMesResp (ResponseSDAMR "audio_message" (DocInfo id ownerId) )) -> return (DocInfo id ownerId)
+      _                      -> do
+        logError (hLog h) $ "UNKNOWN RESPONSE to saveDocAudioMesOnServer:\n" ++ show json
+        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
 
 loadPhotoToServ' :: T.Text -> T.Text -> IO LBS.ByteString
 loadPhotoToServ' serUrl picUrl = do
@@ -242,10 +324,10 @@ savePhotoOnServ' h (LoadPhotoResp server hash photo) = do
   res <- httpLbs req manager
   return (responseBody res)
 
-checkSavePhotoResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m PhotoInfo
+checkSavePhotoResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m DocInfo
 checkSavePhotoResponse h json = do
   case decode json of
-      Just savePhotoResp@(SavePhotoResp [PhotoInfo id ownerId ac_key]) -> return (PhotoInfo id ownerId ac_key)
+      Just (SavePhotoResp [DocInfo id ownerId ]) -> return (DocInfo id ownerId )
       _                      -> do
         logError (hLog h) $ "UNKNOWN RESPONSE to savePhotoOnServer:\n" ++ show json
         throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
@@ -351,6 +433,15 @@ getLongPollServer' h = do
   res <- httpLbs req manager
   return (responseBody res)
 
+getDocServer' :: Handle IO -> Int -> String -> IO LBS.ByteString
+getDocServer' h usId type' = do
+  manager <- newTlsManager
+  req <- parseRequest $ "https://api.vk.com/method/docs.getMessagesUploadServer?type=" ++ type' ++ "&peer_id=" ++ show usId ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
+  res <- httpLbs req manager
+  return (responseBody res)
+
+
+
 getPhotoServer' :: Handle IO -> Int -> IO LBS.ByteString
 getPhotoServer' h usId = do
   manager <- newTlsManager
@@ -358,10 +449,10 @@ getPhotoServer' h usId = do
   res <- httpLbs req manager
   return (responseBody res)
 
-checkGetPhotoServResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m T.Text
-checkGetPhotoServResponse h json = do
+checkGetUploadServResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m T.Text
+checkGetUploadServResponse h json = do
   case decode json of
-      Just (PhotoServerResponse (UploadUrl serUrl)) -> return serUrl
+      Just (UploadServerResponse (UploadUrl serUrl)) -> return serUrl
       _                      -> do
         logError (hLog h) $ "UNKNOWN RESPONSE to getPhotoServer:\n" ++ show json
         throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
