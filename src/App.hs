@@ -236,7 +236,9 @@ answerAttachment h usId (AudioMesAttachment "audio_message" (Audio docUrl)) = do
   (DocInfo id owner_id) <- checkSaveDocAuMesResponse h saveDocJson
   return $ Right $ "doc" ++ show owner_id ++ "_" ++ show id
 answerAttachment h usId (VideoAttachment "video" (DocInfo id owner_id)) = do
-  return $ Right $ "video" ++ show owner_id ++ "_" ++ show id 
+  return $ Right $ "video" ++ show owner_id ++ "_" ++ show id
+answerAttachment h usId (AudioAttachment "audio" (DocInfo id owner_id)) = do
+  return $ Right $ "audio" ++ show owner_id ++ "_" ++ show id 
 answerAttachment h usId (StickerAttachment "sticker" (StickerInfo id)) = 
   return $ Right $ "doc" ++ show id ++ "_" ++ show id 
 answerAttachment h usId (UnknownAttachment _) = return $ Left "unknown attachment"

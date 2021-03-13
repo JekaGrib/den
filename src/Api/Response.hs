@@ -68,6 +68,9 @@ data Attachment
     | StickerAttachment
       { type' :: T.Text
       , sticker :: StickerInfo }
+    | AudioAttachment
+      { type' :: T.Text
+      , audio :: DocInfo }
     | UnknownAttachment Object 
      deriving (Generic, Show)
 
@@ -82,7 +85,9 @@ instance FromJSON Attachment where
         <$> v .: "type"
         <*> v .: "video") <|> (StickerAttachment
         <$> v .: "type"
-        <*> v .: "sticker") <|> (UnknownAttachment  <$> parseJSON (Object v))
+        <*> v .: "sticker") <|> (AudioAttachment
+        <$> v .: "type"
+        <*> v .: "audio") <|> (UnknownAttachment  <$> parseJSON (Object v))
 
 data Doc 
     = Doc{
