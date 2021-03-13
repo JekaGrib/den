@@ -53,15 +53,14 @@ data Handle m = Handle
     hLog              :: LogHandle m,
     getLongPollServer :: m LBS.ByteString,
     getUpdates        :: T.Text -> T.Text -> T.Text -> m LBS.ByteString,
-    sendMsg           :: Int -> T.Text -> m LBS.ByteString,
+    sendMsg           :: Int -> T.Text -> [Int] -> [String] -> String -> (String,String) -> m LBS.ByteString,
     sendKeyb          :: Int -> Int -> T.Text -> m LBS.ByteString,
     getPhotoServer    :: Int -> m LBS.ByteString,
     loadPhotoToServ   :: T.Text -> T.Text -> m LBS.ByteString,
     savePhotoOnServ   :: LoadPhotoResp -> m LBS.ByteString,
     getDocServer      :: Int -> String -> m LBS.ByteString,
     loadDocToServ     :: T.Text -> T.Text -> String -> m LBS.ByteString,
-    saveDocOnServ     :: LoadDocResp -> String -> m LBS.ByteString,
-    sendMsgWithAttach :: Int -> T.Text -> [String] -> m LBS.ByteString
+    saveDocOnServ     :: LoadDocResp -> String -> m LBS.ByteString
     }
 
 data Config = Config 
@@ -136,7 +135,7 @@ chooseAction h upd = do
               modify $ func $ changeDB usId $ Right newN
               let infoMsg = T.pack $ "Number of repeats successfully changed from " ++ show oldN ++ " to " ++ show newN ++ "\n"
               lift $ logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack infoMsg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
-              response <- lift $ sendMsg h usId infoMsg `catch` (\e -> do
+              response <- lift $ sendTxtMsg h usId infoMsg `catch` (\e -> do
                                     logError (hLog h) $ show e ++ " SendMessage fail\n"    
                                     throwM $ DuringSendMsgException (Msg infoMsg) (ToUserId usId) $ show (e :: SomeException))
               lift $ logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
@@ -146,7 +145,7 @@ chooseAction h upd = do
               modify $ func $ changeDB usId $ Right oldN
               let infoMsg = T.pack $ "UNKNOWN NUMBER\nI,m ssory, number of repeats has not changed, it is still " ++ show oldN ++ "\nTo change it you may sent me command \"/repeat\" and then choose number from 1 to 5 on keyboard\nPlease, try again later\n"
               lift $ logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack infoMsg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
-              response <- lift $ sendMsg h usId infoMsg `catch` (\e -> do
+              response <- lift $ sendTxtMsg h usId infoMsg `catch` (\e -> do
                                     logError (hLog h) $ show e ++ " SendMessage fail\n"    
                                     throwM $ DuringSendMsgException (Msg infoMsg) (ToUserId usId) $ show (e :: SomeException))
               lift $ logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
@@ -156,12 +155,14 @@ chooseAction h upd = do
           case obj of
             AboutObj usId id peerId txt [] [] -> do
               chooseActionOfTxt h currN usId txt
+            AboutObj usId id peerId txt [] [StickerAttachment "sticker" (StickerInfo idSt)] -> do
+              lift $ replicateM_ currN $ sendStickMsg h usId idSt
             AboutObj usId id peerId txt [] attachs -> do
               eitherAttachStrings <- lift $ mapM (answerAttachment h usId) attachs
               case sequence eitherAttachStrings of
                 Right attachStrings -> do
                   lift $ replicateM_ currN $ do 
-                    response <- sendMsgWithAttach h usId txt attachStrings
+                    response <- sendAttachMsg h usId txt attachStrings
                     checkSendMsgResponse h usId txt response
                 Left str ->
                   lift $ logWarning (hLog h) ("There is UNKNOWN ATTACMENT in updateList. BOT WILL IGNORE IT. " ++ show attachs ++ "\n")     
@@ -177,7 +178,7 @@ chooseActionOfTxt h currN usId msg = case filter ((/=) ' ') . T.unpack $ msg of
   "/help" -> do
     let infoMsg = T.pack $ cHelpMsg (hConf h) 
     lift $ logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack infoMsg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
-    response <- lift $ sendMsg h usId infoMsg `catch` (\e -> do
+    response <- lift $ sendTxtMsg h usId infoMsg `catch` (\e -> do
                           logError (hLog h) $ show e ++ " SendMessage fail\n"    
                           throwM $ DuringSendMsgException (Msg infoMsg) (ToUserId usId) $ show (e :: SomeException))
     lift $ logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
@@ -194,7 +195,7 @@ chooseActionOfTxt h currN usId msg = case filter ((/=) ' ') . T.unpack $ msg of
   _ -> do 
     lift $ replicateM_ currN $ do
       logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack msg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
-      response <- sendMsg h usId msg `catch` (\e -> do
+      response <- sendTxtMsg h usId msg `catch` (\e -> do
                           logError (hLog h) $ show e ++ " SendMessage fail\n"    
                           throwM $ DuringSendMsgException (Msg msg) (ToUserId usId) $ show (e :: SomeException))
       logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
@@ -464,19 +465,31 @@ getUpdates' key server ts = do
   res <- httpLbs req manager
   return (responseBody res)
 
-sendMsg' :: Handle IO -> Int -> T.Text -> IO LBS.ByteString
-sendMsg' h usId msg = do
+sendMsg' :: Handle IO -> Int -> T.Text -> [Int] -> [String] -> String -> (String,String) -> IO LBS.ByteString
+sendMsg' h usId txt fwds attachStrings stickerId (lat,long)  = do
   manager <- newTlsManager
-  req <- parseRequest $ "https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack msg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
+  let param1  = "user_id=" ++ show usId
+  let param2  = "random_id=0"
+  let param3  = "message=" ++ T.unpack txt
+  let param4  = "forward_messages=" ++ (intercalate "," . fmap show $ fwds) 
+  let param5  = "attachment=" ++ intercalate "," attachStrings
+  let param6  = "sticker_id=" ++ stickerId
+  let param7  = "lat=" ++ lat
+  let param8  = "long=" ++ long
+  let param9  = "access_token=" ++ cBotToken (hConf h)
+  let param10 = "v=5.103"
+  let params  = intercalate "&" (param1:param2:param3:param4:param5:param6:param7:param8:param9:param10:[])
+  req <- parseRequest $ "https://api.vk.com/method/messages.send?" ++ params
   res <- httpLbs req manager
   return (responseBody res)
 
-sendMsgWithAttach' :: Handle IO -> Int -> T.Text -> [String] -> IO LBS.ByteString
-sendMsgWithAttach' h usId msg attachStrs = do
-  manager <- newTlsManager
-  req <- parseRequest $ "https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack msg ++ "&attachment=" ++ intercalate "," attachStrs ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
-  res <- httpLbs req manager
-  return (responseBody res)
+sendTxtMsg h usId txt = sendMsg h usId txt [] [] "" ("","")
+sendAttachMsg h usId txt attachStrs = sendMsg h usId txt [] attachStrs "" ("","")
+
+sendStickMsg :: (Monad m, MonadCatch m) => Handle m -> Int -> Int -> m LBS.ByteString
+sendStickMsg  h usId stickerId  = sendMsg h usId "" [] [] (show stickerId) ("","")
+
+
 
 sendKeyb' :: Handle IO -> Int -> Int -> T.Text -> IO LBS.ByteString
 sendKeyb' h usId n msg = do

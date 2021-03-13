@@ -80,7 +80,9 @@ instance FromJSON Attachment where
         <$> v .: "type"
         <*> v .: "audio_message") <|> (VideoAttachment
         <$> v .: "type"
-        <*> v .: "video") <|> (UnknownAttachment  <$> parseJSON (Object v))
+        <*> v .: "video") <|> (StickerAttachment
+        <$> v .: "type"
+        <*> v .: "sticker") <|> (UnknownAttachment  <$> parseJSON (Object v))
 
 data Doc 
     = Doc{
