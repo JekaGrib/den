@@ -168,6 +168,13 @@ chooseAction h upd = do
                   lift $ logWarning (hLog h) ("There is UNKNOWN ATTACMENT in updateList. BOT WILL IGNORE IT. " ++ show attachs ++ "\n")     
             AboutObj usId id peerId txt fwds attachs Nothing -> do
               lift $ logWarning (hLog h) ("There is forward message. BOT WILL IGNORE IT. " ++ show upd ++ "\n")
+              let infoMsg = T.pack $ "I`m sorry, I can`t work with forward messages, so I will ignore this message\n"
+              lift $ logDebug (hLog h) ("Send request to send msg https://api.vk.com/method/messages.send?user_id=" ++ show usId ++ "&random_id=0&message=" ++ T.unpack infoMsg ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103\n" )
+              response <- lift $ sendTxtMsg h usId infoMsg `catch` (\e -> do
+                                    logError (hLog h) $ show e ++ " SendMessage fail\n"    
+                                    throwM $ DuringSendMsgException (Msg infoMsg) (ToUserId usId) $ show (e :: SomeException))
+              lift $ logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
+              lift $ checkSendMsgResponse h usId infoMsg response
     UnknownUpdate _ -> do
       lift $ logWarning (hLog h) ("There is UNKNOWN UPDATE. BOT WILL IGNORE IT. " ++ show upd ++ "\n")
     _ -> do
