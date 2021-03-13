@@ -245,7 +245,13 @@ answerAttachment h usId (AudioMesAttachment "audio_message" (Audio docUrl)) = do
 answerAttachment h usId (VideoAttachment "video" (DocInfo id owner_id)) = do
   return $ Right $ "video" ++ show owner_id ++ "_" ++ show id
 answerAttachment h usId (AudioAttachment "audio" (DocInfo id owner_id)) = do
-  return $ Right $ "audio" ++ show owner_id ++ "_" ++ show id 
+  return $ Right $ "audio" ++ show owner_id ++ "_" ++ show id
+answerAttachment h usId (MarketAttachment "market" (DocInfo id owner_id)) = do
+  return $ Right $ "market" ++ show owner_id ++ "_" ++ show id
+answerAttachment h usId (WallAttachment "wall" (WallInfo id owner_id)) = do
+  return $ Right $ "wall" ++ show owner_id ++ "_" ++ show id
+answerAttachment h usId (PollAttachment "poll" (DocInfo id owner_id)) = do
+  return $ Right $ "poll" ++ show owner_id ++ "_" ++ show id  
 answerAttachment h usId (StickerAttachment "sticker" (StickerInfo id)) = 
   return $ Left "wrong attachment"
 answerAttachment h usId (UnknownAttachment _) = return $ Left "unknown attachment"

@@ -72,6 +72,15 @@ data Attachment
     | AudioAttachment
       { type' :: T.Text
       , audio :: DocInfo }
+    | MarketAttachment
+      { type' :: T.Text
+      , market :: DocInfo }
+    | WallAttachment
+      { type' :: T.Text
+      , wall :: WallInfo }
+    | PollAttachment
+      { type' :: T.Text
+      , poll :: DocInfo }
     | UnknownAttachment Object 
      deriving (Generic, Show)
 
@@ -88,7 +97,13 @@ instance FromJSON Attachment where
         <$> v .: "type"
         <*> v .: "sticker") <|> (AudioAttachment
         <$> v .: "type"
-        <*> v .: "audio") <|> (UnknownAttachment  <$> parseJSON (Object v))
+        <*> v .: "audio") <|> (MarketAttachment
+        <$> v .: "type"
+        <*> v .: "market") <|> (WallAttachment
+        <$> v .: "type"
+        <*> v .: "wall") <|> (PollAttachment
+        <$> v .: "type"
+        <*> v .: "poll") <|> (UnknownAttachment  <$> parseJSON (Object v))
 
 data Doc 
     = Doc{
@@ -198,6 +213,16 @@ instance FromJSON DocInfo where
       parseJSON (Object v) = DocInfo
         <$> v .: "id"
         <*> v .: "owner_id"
+
+data WallInfo = WallInfo {
+      idWI :: Int
+    , from_idWI :: Int
+    } deriving (Generic, Show)
+
+instance FromJSON WallInfo where
+      parseJSON (Object v) = WallInfo
+        <$> v .: "id"
+        <*> v .: "from_id"
 
 data SaveDocAuMesResp = SaveDocAuMesResp {responseSDAMR :: ResponseSDAMR} deriving (Generic, Show)
 
