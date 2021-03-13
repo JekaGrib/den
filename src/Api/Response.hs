@@ -48,6 +48,7 @@ data AboutObj = AboutObj {
     , text  :: T.Text
     , fwd_messages :: [Object]
     , attachments :: [Attachment]
+    , geo :: Maybe Geo
     } deriving (Generic, Show)
 
 instance FromJSON AboutObj
@@ -262,3 +263,20 @@ instance FromJSON UploadServerResponse where
 data UploadUrl = UploadUrl {upload_url :: T.Text} deriving (Generic, Show)
 
 instance FromJSON UploadUrl
+
+data Geo = Geo {
+      typeG :: T.Text
+    , coordinates  :: Coordinates
+    } deriving (Generic, Show)
+
+instance FromJSON Geo where
+    parseJSON (Object v) = Geo
+        <$> v .: "type"
+        <*> v .: "coordinates"
+
+data Coordinates = Coordinates {
+      latitude :: Double
+    , longitude  :: Double
+    } deriving (Generic, Show)
+
+instance FromJSON Coordinates 

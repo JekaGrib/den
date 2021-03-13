@@ -122,7 +122,7 @@ chooseAction :: (Monad m, MonadCatch m) => Handle m -> Update -> StateT (ServerI
 chooseAction h upd = do
   lift $ logInfo (hLog h) ("Analysis update from the list\n")
   case upd of   
-    Update "message_new" obj@(AboutObj usId id peerId txt fwds attachs) -> do
+    Update "message_new" obj@(AboutObj usId id peerId txt fwds attachs maybeGeo) -> do
       let msg = txt
       lift $ logInfo (hLog h) ("Get msg " ++ show msg ++ " from user " ++ show usId ++ "\n")
       db <- gets snd
@@ -153,20 +153,20 @@ chooseAction h upd = do
         _ -> do
           let currN = case lookup usId db of { Just (Right n) -> n ; Nothing -> cStartN (hConf h) }
           case obj of
-            AboutObj usId id peerId txt [] [] -> do
+            AboutObj usId id peerId txt [] [] Nothing -> do
               chooseActionOfTxt h currN usId txt
-            AboutObj usId id peerId txt [] [StickerAttachment "sticker" (StickerInfo idSt)] -> do
+            AboutObj usId id peerId txt [] [StickerAttachment "sticker" (StickerInfo idSt)] Nothing -> do
               lift $ replicateM_ currN $ sendStickMsg h usId idSt
-            AboutObj usId id peerId txt [] attachs -> do
+            AboutObj usId id peerId txt [] attachs maybeGeo -> do
               eitherAttachStrings <- lift $ mapM (answerAttachment h usId) attachs
               case sequence eitherAttachStrings of
                 Right attachStrings -> do
                   lift $ replicateM_ currN $ do 
-                    response <- sendAttachMsg h usId txt attachStrings
+                    response <- sendAttachMaybeGeoMsg h usId txt attachStrings maybeGeo
                     checkSendMsgResponse h usId txt response
                 Left str ->
                   lift $ logWarning (hLog h) ("There is UNKNOWN ATTACMENT in updateList. BOT WILL IGNORE IT. " ++ show attachs ++ "\n")     
-            AboutObj usId id peerId txt fwds attachs -> do
+            AboutObj usId id peerId txt fwds attachs Nothing -> do
               lift $ logWarning (hLog h) ("There is forward message. BOT WILL IGNORE IT. " ++ show upd ++ "\n")
     UnknownUpdate _ -> do
       lift $ logWarning (hLog h) ("There is UNKNOWN UPDATE. BOT WILL IGNORE IT. " ++ show upd ++ "\n")
@@ -240,7 +240,7 @@ answerAttachment h usId (VideoAttachment "video" (DocInfo id owner_id)) = do
 answerAttachment h usId (AudioAttachment "audio" (DocInfo id owner_id)) = do
   return $ Right $ "audio" ++ show owner_id ++ "_" ++ show id 
 answerAttachment h usId (StickerAttachment "sticker" (StickerInfo id)) = 
-  return $ Right $ "doc" ++ show id ++ "_" ++ show id 
+  return $ Left "wrong attachment"
 answerAttachment h usId (UnknownAttachment _) = return $ Left "unknown attachment"
 
 
@@ -486,7 +486,14 @@ sendMsg' h usId txt fwds attachStrings stickerId (lat,long)  = do
   return (responseBody res)
 
 sendTxtMsg h usId txt = sendMsg h usId txt [] [] "" ("","")
-sendAttachMsg h usId txt attachStrs = sendMsg h usId txt [] attachStrs "" ("","")
+sendAttachMaybeGeoMsg h usId txt attachStrs maybeGeo = case maybeGeo of 
+  Nothing -> sendMsg h usId txt [] attachStrs "" ("","")
+  Just (Geo "point" (Coordinates lat long)) -> 
+    sendMsg h usId txt [] attachStrs "" (show lat,show long)
+  _ -> do
+    logError (hLog h) $ "UNKNOWN GEO type\n" ++ show maybeGeo
+    throwM $ DuringGetUpdatesException $ "UNKNOWN GEO type\n" ++ show maybeGeo
+
 
 sendStickMsg :: (Monad m, MonadCatch m) => Handle m -> Int -> Int -> m LBS.ByteString
 sendStickMsg  h usId stickerId  = sendMsg h usId "" [] [] (show stickerId) ("","")
@@ -546,7 +553,7 @@ changeDB usId eitherN bd =
 checkButton :: AboutObj -> Maybe Int
 checkButton obj =
   case obj of
-    AboutObj usId id peerId txt [] [] -> checkTextButton txt
+    AboutObj usId id peerId txt [] [] Nothing -> checkTextButton txt
     _  -> Nothing
 
 checkTextButton :: T.Text -> Maybe Int
