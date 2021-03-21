@@ -56,11 +56,12 @@ data Handle m = Handle
     sendMsg           :: Int -> T.Text -> [Int] -> [String] -> String -> (String,String) -> m LBS.ByteString,
     sendKeyb          :: Int -> Int -> T.Text -> m LBS.ByteString,
     getPhotoServer    :: Int -> m LBS.ByteString,
-    loadPhotoToServ   :: T.Text -> T.Text -> m LBS.ByteString,
+    loadPhotoToServ   :: T.Text -> T.Text -> BS.ByteString -> m LBS.ByteString,
     savePhotoOnServ   :: LoadPhotoResp -> m LBS.ByteString,
     getDocServer      :: Int -> String -> m LBS.ByteString,
-    loadDocToServ     :: T.Text -> T.Text -> String -> m LBS.ByteString,
-    saveDocOnServ     :: LoadDocResp -> String -> m LBS.ByteString
+    loadDocToServ     :: T.Text -> T.Text -> BS.ByteString -> String -> m LBS.ByteString,
+    saveDocOnServ     :: LoadDocResp -> String -> m LBS.ByteString,
+    goToUrl           :: T.Text -> m BS.ByteString
     }
 
 data Config = Config 
@@ -221,7 +222,8 @@ answerAttachment h usId (PhotoAttachment "photo" (Photo sizes)) = do
   let picUrl = url . head . reverse . sortOn height $ sizes
   serRespJson <- getPhotoServer h usId
   serUrl <- checkGetUploadServResponse h serRespJson
-  loadPhotoJson <- loadPhotoToServ h serUrl picUrl
+  bsPic <- goToUrl h picUrl
+  loadPhotoJson <- loadPhotoToServ h serUrl picUrl bsPic
   loadPhotoResp <- checkLoadPhotoResponse h loadPhotoJson
   savePhotoJson <- savePhotoOnServ h loadPhotoResp
   (DocInfo id owner_id) <- checkSavePhotoResponse h savePhotoJson
@@ -229,7 +231,8 @@ answerAttachment h usId (PhotoAttachment "photo" (Photo sizes)) = do
 answerAttachment h usId (DocAttachment "doc" (Doc docUrl ext title)) = do
   serRespJson <- getDocServer h usId "doc"
   serUrl <- checkGetUploadServResponse h serRespJson
-  loadDocJson <- loadDocToServ h serUrl docUrl ext
+  bsDoc <- goToUrl h docUrl
+  loadDocJson <- loadDocToServ h serUrl docUrl bsDoc ext
   loadDocResp <- checkLoadDocResponse h loadDocJson
   saveDocJson <- saveDocOnServ h loadDocResp title
   (DocInfo id owner_id) <- checkSaveDocResponse h saveDocJson
@@ -237,7 +240,8 @@ answerAttachment h usId (DocAttachment "doc" (Doc docUrl ext title)) = do
 answerAttachment h usId (AudioMesAttachment "audio_message" (Audio docUrl)) = do
   serRespJson <- getDocServer h usId "audio_message"
   serUrl <- checkGetUploadServResponse h serRespJson
-  loadDocJson <- loadDocToServ h serUrl docUrl "ogg"
+  bsDoc <- goToUrl h docUrl
+  loadDocJson <- loadDocToServ h serUrl docUrl bsDoc "ogg"
   loadDocResp <- checkLoadDocResponse h loadDocJson
   saveDocJson <- saveDocOnServ h loadDocResp "audio_message"
   (DocInfo id owner_id) <- checkSaveDocAuMesResponse h saveDocJson
@@ -257,17 +261,14 @@ answerAttachment h usId (StickerAttachment "sticker" (StickerInfo id)) =
 answerAttachment h usId (UnknownAttachment _) = return $ Left "unknown attachment"
 
 
-loadDocToServ' :: T.Text -> T.Text -> String -> IO LBS.ByteString
-loadDocToServ' serUrl docUrl ext = do
+loadDocToServ' :: T.Text -> T.Text -> BS.ByteString -> String -> IO LBS.ByteString
+loadDocToServ' serUrl docUrl bs ext = do
   manager <- newTlsManager
-  req1 <- parseRequest $ T.unpack docUrl
-  res1  <- httpLbs req1 manager
-  let bs = LBS.toStrict . responseBody $ res1
-  initReq2 <- parseRequest $ T.unpack serUrl
-  req2     <- (formDataBody [partFileRequestBody "file" (T.unpack docUrl ++ " file." ++ ext) $ RequestBodyBS bs]
-                initReq2)
-  res2<- httpLbs req2 manager
-  return (responseBody res2)
+  initReq <- parseRequest $ T.unpack serUrl
+  req     <- (formDataBody [partFileRequestBody "file" (T.unpack docUrl ++ " file." ++ ext) $ RequestBodyBS bs]
+                initReq)
+  res <- httpLbs req manager
+  return (responseBody res)
 
 checkLoadDocResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m LoadDocResp
 checkLoadDocResponse h json = do
@@ -306,17 +307,22 @@ checkSaveDocAuMesResponse h json = do
         logError (hLog h) $ "UNKNOWN RESPONSE to saveDocAudioMesOnServer:\n" ++ show json
         throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
 
-loadPhotoToServ' :: T.Text -> T.Text -> IO LBS.ByteString
-loadPhotoToServ' serUrl picUrl = do
+goToUrl' :: T.Text -> IO BS.ByteString
+goToUrl' url = do
   manager <- newTlsManager
-  req1 <- parseRequest $ T.unpack picUrl
-  res1  <- httpLbs req1 manager
-  let bs = LBS.toStrict . responseBody $ res1
-  initReq2 <- parseRequest $ T.unpack serUrl
-  req2     <- (formDataBody [partFileRequestBody "photo" (T.unpack picUrl) $ RequestBodyBS bs]
-                initReq2)
-  res2<- httpLbs req2 manager
-  return (responseBody res2)
+  req <- parseRequest $ T.unpack url
+  res  <- httpLbs req manager
+  let bs = LBS.toStrict . responseBody $ res
+  return bs
+
+loadPhotoToServ' :: T.Text -> T.Text -> BS.ByteString -> IO LBS.ByteString
+loadPhotoToServ' serUrl picUrl bs = do
+  manager <- newTlsManager
+  initReq <- parseRequest $ T.unpack serUrl
+  req     <- (formDataBody [partFileRequestBody "photo" (T.unpack picUrl) $ RequestBodyBS bs]
+                initReq)
+  res <- httpLbs req manager
+  return (responseBody res)
 
 checkLoadPhotoResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m LoadPhotoResp
 checkLoadPhotoResponse h json = do
