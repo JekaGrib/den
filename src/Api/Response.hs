@@ -292,7 +292,7 @@ instance FromJSON UploadUrl
 data Geo = Geo {
       typeG :: T.Text
     , coordinates  :: Coordinates
-    } deriving (Generic, Show)
+    } deriving (Eq, Generic, Show)
 
 instance FromJSON Geo where
     parseJSON (Object v) = Geo
@@ -302,6 +302,6 @@ instance FromJSON Geo where
 data Coordinates = Coordinates {
       latitude :: Double
     , longitude  :: Double
-    } deriving (Generic, Show)
+    } deriving (Eq, Generic, Show)
 
 instance FromJSON Coordinates 

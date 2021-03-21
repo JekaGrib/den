@@ -10,7 +10,7 @@ import qualified Data.ByteString.Lazy           as LBS
 import           Control.Monad.State
 
 
-data MockAction = GOTSERVER | GOTUPDATES T.Text T.Text T.Text | SENDMSG Int T.Text | SENDKEYB Int Int T.Text | LOGMSG Priority String
+data MockAction = GOTSERVER | GOTUPDATES T.Text T.Text T.Text | SENDMSG Int MSG | SENDKEYB Int Int T.Text | LOGMSG Priority String
                                        deriving (Eq,Show)
 
 getServerTest:: LBS.ByteString -> StateT [MockAction] IO LBS.ByteString
@@ -19,9 +19,11 @@ getServerTest json = StateT $ \s -> return ( json , GOTSERVER : s)
 getUpdatesTest:: LBS.ByteString -> T.Text -> T.Text -> T.Text -> StateT [MockAction] IO LBS.ByteString
 getUpdatesTest json key server ts = StateT $ \s -> return ( json , GOTUPDATES key server ts : s)
 
-sendMsgTest :: LBS.ByteString -> Int -> T.Text -> StateT [MockAction] IO LBS.ByteString
-sendMsgTest json usId msg = StateT $ \s -> 
-    return ( json , (SENDMSG usId msg) : s)
+sendMsgTest :: LBS.ByteString -> Int -> T.Text -> [Int] -> [String] -> String -> (String,String) -> StateT [MockAction] IO LBS.ByteString
+sendMsgTest json usId txt [] [] "" ("","") = StateT $ \s -> 
+    return ( json , (SENDMSG usId (TextMsg txt)) : s)
+sendMsgTest json usId "" [] [] stickerId ("","") = StateT $ \s -> 
+    return ( json , (SENDMSG usId (StickerMsg (read stickerId))) : s)    
 
 sendKeybTest :: LBS.ByteString -> Int -> Int -> T.Text-> StateT [MockAction] IO LBS.ByteString
 sendKeybTest json usId currN msg = StateT $ \s -> 
@@ -76,23 +78,23 @@ main = hspec $ do
     it "work with singleton update list with text msg" $ do
       state <- execStateT (evalStateT (getServer handle2 >> runServ handle2) (ServerInfo "A" "A" "1",initialDB1) ) []
       reverse state `shouldBe`
-        [LOGMSG DEBUG "Send request to getLongPollServer: https://api.vk.com/method/groups.getLongPollServer?group_id=321&access_token=ABC123&v=5.103\n", 
+        [LOGMSG DEBUG "Send request to getLongPollServer: https://api.vk.com/method/groups.getLongPollServer?group_id=321&access_token=ABC123&v=5.103\n",
         GOTSERVER,
-        LOGMSG DEBUG $ "Get response: " ++ show json1 ++ "\n",
-        LOGMSG INFO $ "Work with received server\n",
-        LOGMSG DEBUG $ "Send request to getUpdates: https://lp.vk.com/wh000?act=a_check&key=912481cc91cb3b0e119b9be5c75b383d6887438f&ts=289&wait=25\n",
+        LOGMSG DEBUG "Get response: \"{\\\"response\\\":{\\\"key\\\":\\\"912481cc91cb3b0e119b9be5c75b383d6887438f\\\",\\\"server\\\":\\\"https:\\\\/\\\\/lp.vk.com\\\\/wh000\\\",\\\"ts\\\":\\\"289\\\"}}\"\n",
+        LOGMSG INFO "Work with received server\n",
+        LOGMSG DEBUG "Send request to getUpdates: https://lp.vk.com/wh000?act=a_check&key=912481cc91cb3b0e119b9be5c75b383d6887438f&ts=289&wait=25\n",
         GOTUPDATES "912481cc91cb3b0e119b9be5c75b383d6887438f" "https://lp.vk.com/wh000" "289",
-        LOGMSG DEBUG $ "Get response: " ++ show json3 ++ "\n",
+        LOGMSG DEBUG "Get response: \"{\\\"ts\\\":\\\"290\\\",\\\"updates\\\":[{\\\"type\\\":\\\"message_new\\\",\\\"object\\\":{\\\"date\\\":1594911394,\\\"from_id\\\":123,\\\"id\\\":597,\\\"out\\\":0,\\\"peer_id\\\":16063921,\\\"text\\\":\\\"love\\\",\\\"conversation_message_id\\\":562,\\\"fwd_messages\\\":[],\\\"important\\\":false,\\\"random_id\\\":0,\\\"attachments\\\":[],\\\"is_hidden\\\":false},\\\"group_id\\\":194952914,\\\"event_id\\\":\\\"35ec397e45dfe993d365912ea32be41be5e77a0c\\\"}]}\\r\\n\"\n",
         LOGMSG INFO "There is new updates list\n",
         LOGMSG INFO "Analysis update from the list\n",
-        LOGMSG INFO $ "Get msg \"love\" from user 123\n"] ++
+        LOGMSG INFO "Get TextMsg: \"love\" from user 123\n"] ++
         (concat . replicate 2 $ 
-          [LOGMSG DEBUG "Send request to send msg https://api.vk.com/method/messages.send?user_id=123&random_id=0&message=love&access_token=ABC123&v=5.103\n" ,
-          SENDMSG 123 "love",
+          [LOGMSG DEBUG "Send request to send msg https://api.vk.com/method/messages.send?user_id=123&random_id=0&message=love&access_token=ABC123&v=5.103\n",
+          SENDMSG 123 (TextMsg "love"),
           LOGMSG DEBUG "Get response: \"{\\\"response\\\":626}\"\n",
           LOGMSG INFO "Msg \"love\" was sent to user 123\n"])
     
-    it "work with singleton update list with gif msg (do nothing)" $ do
+    it "work with singleton update list with sticker msg " $ do
       state <- execStateT (evalStateT (getServer handle5 >> runServ handle5) (ServerInfo "A" "A" "1",initialDB1) ) []
       reverse state `shouldBe`
         [LOGMSG DEBUG "Send request to getLongPollServer: https://api.vk.com/method/groups.getLongPollServer?group_id=321&access_token=ABC123&v=5.103\n", 
@@ -104,7 +106,11 @@ main = hspec $ do
         LOGMSG DEBUG $ "Get response: " ++ show json7 ++ "\n",
         LOGMSG INFO "There is new updates list\n",
         LOGMSG INFO "Analysis update from the list\n",
-        LOGMSG WARNING "There is attachment update. BOT WILL IGNORE IT\n"] 
+        LOGMSG INFO "Get AttachmentMsg: [StickerAttachment {type' = \"sticker\", sticker = StickerInfo {sticker_id = 9014}}] from user 16063921\n"] ++
+        (concat . replicate 2 $ 
+          [LOGMSG DEBUG "Send request to send StickerMsg https://api.vk.com/method/messages.send?user_id=16063921&random_id=0&sticker_id=9014&access_token=ABC123&v=5.103\n",
+          SENDMSG 16063921 (StickerMsg 9014),
+          LOGMSG INFO "Sticker_id 9014 was sent to user 16063921\n"])
     
     it "throw CheckGetUpdatesException with error answer" $ do
       evalStateT (evalStateT (getServer handle6 >> runServ handle6) (ServerInfo "A" "A" "1",initialDB1) ) []

@@ -42,7 +42,7 @@ data VKBotException
   | DuringGetTimeException String
   | DuringPullConfigException String
   | DuringParseConfigException String
-    deriving (Show)
+    deriving (Eq,Show)
 
 instance Exception VKBotException 
 
@@ -75,7 +75,7 @@ data OpenRepeat = OpenRepeat Int
                         deriving (Eq,Show)
 
 data MSG = TextMsg T.Text | AttachmentMsg T.Text [String] (Maybe Geo) | StickerMsg Int 
-  deriving (Show)
+  deriving (Eq,Show)
 
 
 
