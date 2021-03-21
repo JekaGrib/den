@@ -74,13 +74,10 @@ data Config = Config
 data OpenRepeat = OpenRepeat Int
                         deriving (Eq,Show)
 
---enc :: ToJSON a => a -> LBS.ByteString
---enc = encode
+data MSG = TextMsg T.Text | AttachmentMsg T.Text [String] (Maybe Geo) | StickerMsg Int 
+  deriving (Show)
 
---keyB = {"one_time": true,"buttons": [[{"action": {"type": "text","label": "1"},"color": "positive"}],[{"action": {"type": "text","label": "2"},"color": "positive"}],[{"action": {"type": "text","label": "3"},"color": "positive"}],[{"action": {"type": "text","label": "4"},"color": "positive"}],[{"action": {"type": "text","label": "5"},"color": "positive"}]],"inline":false}
---keyB1 = "{\"one_time\":true,\"buttons\":[[{\"action\": {\"type\":\"text\",\"label\":\"1\"},\"color\":\"positive\"}],[{\"action\": {\"type\":\"text\",\"label\":\"2\"},\"color\":\"positive\"}]],\"inline\":false}"
 
---keyB = "%7B%22one_time%22%3A%20true%2C%22buttons%22%3A%20%5B%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%221%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%222%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%223%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%224%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%2C%5B%7B%22action%22%3A%20%7B%22type%22%3A%20%22text%22%2C%22label%22%3A%20%225%22%7D%2C%22color%22%3A%20%22positive%22%7D%5D%5D%2C%22inline%22%3Afalse%7D"
 
 run :: (Monad m, MonadCatch m) => Handle m -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m ()
 run h = do
@@ -99,8 +96,6 @@ getServer h = do
   let key =  extractKey $ jsonServ
   let server = extractServ $ jsonServ
   modify $ changeServerInfo (ServerInfo key server ts)
-
-  
   
 getUpdAndLog :: (Monad m, MonadCatch m) => Handle m -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m LBS.ByteString     
 getUpdAndLog h = do
@@ -117,17 +112,6 @@ runServ h = do
   json <- getUpdAndLog h
   upds <- checkUpdates h json
   mapM_ (chooseAction h) upds
-
-prettyMsgInfo :: Int -> T.Text -> [Object] -> [Attachment] -> Maybe Geo -> String
-prettyMsgInfo usId txt [] [] Nothing = "Get TextMsg: " ++ show txt ++ " from user " ++ show usId ++ "\n"
-prettyMsgInfo usId txt objs [] Nothing = "Get ForwardMsg: " ++ show objs ++ " from user " ++ show usId ++ "\n"
-prettyMsgInfo usId txt [] [] (Just geo) = "Get GeoMsg: " ++ show geo ++ " from user " ++ show usId ++ "\n"
-prettyMsgInfo usId txt [] attachs Nothing = "Get AttachmentMsg: " ++ show attachs ++ " from user " ++ show usId ++ "\n"
-prettyMsgInfo usId txt objs attachs Nothing = "Get AttachmentMsg: " ++ show attachs ++ ", with ForwardParts: " ++ show objs ++ "  from user " ++ show usId ++ "\n"
-prettyMsgInfo usId txt [] attachs (Just geo) = "Get AttachmentMsg: " ++ show attachs ++ ", with Geo: " ++ show geo ++ "  from user " ++ show usId ++ "\n"
-prettyMsgInfo usId txt objs [] (Just geo) = "Get ForwardMsg: " ++ show objs ++ ", with Geo: " ++ show geo ++ "  from user " ++ show usId ++ "\n"
-prettyMsgInfo usId txt objs attachs (Just geo) = "Get AttachmentMsg: " ++ show attachs ++ ", with Geo: " ++ show geo ++ ", with ForwardParts: " ++ show objs ++ "  from user " ++ show usId ++ "\n"
-
 
 chooseAction :: (Monad m, MonadCatch m) => Handle m -> Update -> StateT (ServerInfo,[(Int , Either OpenRepeat Int)]) m ()
 chooseAction h upd = do
@@ -226,10 +210,6 @@ chooseActionOfTxt h currN usId txt = case filter ((/=) ' ') . T.unpack $ txt of
       logDebug (hLog h) ("Get response: " ++ show response ++ "\n")
       checkSendMsgResponse h usId (TextMsg txt) response
 
-{-    Update {objectUpd = AboutObj {attachments = [PhotoAttachment {type' = _ }]}} -> do
-      lift $ logWarning (hLog h) ("There is attachment update. BOT WILL IGNORE IT\n") 
-UnknownUpdate _ -> do
-      lift $ logWarning (hLog h) ("There is UNKNOWN UPDATE. BOT WILL IGNORE IT\n") -}
 
 getAttachmentString :: (Monad m, MonadCatch m) => Handle m -> Int -> Attachment -> m (Either String String)
 getAttachmentString h usId (PhotoAttachment "photo" (Photo [])) = do
@@ -277,113 +257,20 @@ getAttachmentString h usId (StickerAttachment "sticker" (StickerInfo id)) =
 getAttachmentString h usId (UnknownAttachment obj) = return $ Left $ "Unknown attachment" ++ show obj ++ "\n"
 
 
-loadDocToServ' :: T.Text -> T.Text -> BS.ByteString -> String -> IO LBS.ByteString
-loadDocToServ' serUrl docUrl bs ext = do
-  manager <- newTlsManager
-  initReq <- parseRequest $ T.unpack serUrl
-  req     <- (formDataBody [partFileRequestBody "file" (T.unpack docUrl ++ " file." ++ ext) $ RequestBodyBS bs]
-                initReq)
-  res <- httpLbs req manager
-  return (responseBody res)
+sendTxtMsg :: (Monad m, MonadCatch m) => Handle m -> Int -> T.Text -> m LBS.ByteString
+sendTxtMsg h usId txt = sendMsg h usId txt [] [] "" ("","")
 
-checkLoadDocResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m LoadDocResp
-checkLoadDocResponse h json = do
-  case decode json of
-      Just loadDocResp@(LoadDocResp file) -> return loadDocResp
-      _                      -> do
-        logError (hLog h) $ "UNKNOWN RESPONSE to loadDocToServer:\n" ++ show json
-        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
+sendAttachMaybeGeoMsg :: (Monad m, MonadCatch m) => Handle m -> Int -> T.Text -> [String] -> Maybe Geo -> m LBS.ByteString
+sendAttachMaybeGeoMsg h usId txt attachStrs maybeGeo = case maybeGeo of 
+  Nothing -> sendMsg h usId txt [] attachStrs "" ("","")
+  Just (Geo "point" (Coordinates lat long)) -> 
+    sendMsg h usId txt [] attachStrs "" (show lat,show long)
+  _ -> do
+    logError (hLog h) $ "UNKNOWN GEO type\n" ++ show maybeGeo
+    throwM $ DuringGetUpdatesException $ "UNKNOWN GEO type\n" ++ show maybeGeo
 
-saveDocOnServ' :: Handle IO -> LoadDocResp -> String -> IO LBS.ByteString
-saveDocOnServ' h (LoadDocResp file) title = do
-  manager <- newTlsManager
-  initReq <- parseRequest $ "https://api.vk.com/method/docs.save"
-  let param1 = ("file"        , fromString file)
-  let param2 = ("title"       , fromString title)
-  let param3 = ("access_token", fromString (cBotToken $ (hConf h))) 
-  let param4 = ("v"           ,"5.103")
-  let params = param1 : param2 : param3 : param4 : []   
-  let req = urlEncodedBody params initReq
-  res <- httpLbs req manager
-  return (responseBody res)
-
-checkSaveDocResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m DocInfo
-checkSaveDocResponse h json = do
-  case decode json of
-      Just (SaveDocResp (ResponseSDR "doc" (DocInfo id ownerId) )) -> return (DocInfo id ownerId)
-      _                      -> do
-        logError (hLog h) $ "UNKNOWN RESPONSE to saveDocOnServer:\n" ++ show json
-        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
-
-checkSaveDocAuMesResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m DocInfo
-checkSaveDocAuMesResponse h json = do
-  case decode json of
-      Just (SaveDocAuMesResp (ResponseSDAMR "audio_message" (DocInfo id ownerId) )) -> return (DocInfo id ownerId)
-      _                      -> do
-        logError (hLog h) $ "UNKNOWN RESPONSE to saveDocAudioMesOnServer:\n" ++ show json
-        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
-
-goToUrl' :: T.Text -> IO BS.ByteString
-goToUrl' url = do
-  manager <- newTlsManager
-  req <- parseRequest $ T.unpack url
-  res  <- httpLbs req manager
-  let bs = LBS.toStrict . responseBody $ res
-  return bs
-
-loadPhotoToServ' :: T.Text -> T.Text -> BS.ByteString -> IO LBS.ByteString
-loadPhotoToServ' serUrl picUrl bs = do
-  manager <- newTlsManager
-  initReq <- parseRequest $ T.unpack serUrl
-  req     <- (formDataBody [partFileRequestBody "photo" (T.unpack picUrl) $ RequestBodyBS bs]
-                initReq)
-  res <- httpLbs req manager
-  return (responseBody res)
-
-checkLoadPhotoResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m LoadPhotoResp
-checkLoadPhotoResponse h json = do
-  case decode json of
-      Just loadPhotoResp@(LoadPhotoResp server hash photo) -> return loadPhotoResp
-      _                      -> do
-        logError (hLog h) $ "UNKNOWN RESPONSE to loadPhotoToServer:\n" ++ show json
-        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
-
-savePhotoOnServ' :: Handle IO -> LoadPhotoResp -> IO LBS.ByteString
-savePhotoOnServ' h (LoadPhotoResp server hash photo) = do
-  manager <- newTlsManager
-  initReq <- parseRequest $ "https://api.vk.com/method/photos.saveMessagesPhoto"
-  let param1 = ("server"      , fromString . show $ server) 
-  let param2 = ("hash"        , fromString hash)
-  let param3 = ("photo"       , fromString photo)
-  let param4 = ("access_token", fromString (cBotToken $ (hConf h))) 
-  let param5 = ("v"           ,"5.103")
-  let params = param1 : param2 : param3 : param4 : param5 : [] 
-  let req = urlEncodedBody params initReq
-  res <- httpLbs req manager
-  return (responseBody res)
-
-checkSavePhotoResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m DocInfo
-checkSavePhotoResponse h json = do
-  case decode json of
-      Just (SavePhotoResp [DocInfo id ownerId ]) -> return (DocInfo id ownerId )
-      _                      -> do
-        logError (hLog h) $ "UNKNOWN RESPONSE to savePhotoOnServer:\n" ++ show json
-        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
-
-{-loadPhotoToServ11 h serUrl picUrl = do
-  manager <- newTlsManager
-  req1 <- parseRequest $ T.unpack picUrl
-  res  <- httpLbs req1 manager
-  let bs = LBS.toStrict . responseBody $ res
-  (fP,hl) <- S.openTempFile "./" "pic.jpg"
-  S.hClose hl
-  BS.writeFile fP bs
-  S.hClose hl
-  initReq2 <- parseRequest $ T.unpack serUrl
-  req2     <- (formDataBody [partFileSource "photo" fP]
-                initReq2)
-  httpLbs req2 manager-}
-
+sendStickMsg :: (Monad m, MonadCatch m) => Handle m -> Int -> Int -> m LBS.ByteString
+sendStickMsg  h usId stickerId  = sendMsg h usId "" [] [] (show stickerId) ("","")
 
 
 checkGetServResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m ()
@@ -438,9 +325,6 @@ checkUpdates h json = do
         lift $ logInfo (hLog h) ("There is new updates list\n")
         return upds
 
-data MSG = TextMsg T.Text | AttachmentMsg T.Text [String] (Maybe Geo) | StickerMsg Int 
-  deriving (Show)
-
 checkSendMsgResponse :: (Monad m, MonadCatch m) => Handle m -> Int -> MSG -> LBS.ByteString -> m ()
 checkSendMsgResponse h usId msg json = do
   case decode json of
@@ -471,6 +355,55 @@ checkSendKeybResponse h usId n msg json = do
       Just _                       -> do
         logInfo (hLog h) ("Keyboard with message: " ++ show n ++ show msg ++ " was sent to user " ++ show usId ++ "\n")
 
+checkGetUploadServResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m T.Text
+checkGetUploadServResponse h json = do
+  case decode json of
+      Just (UploadServerResponse (UploadUrl serUrl)) -> return serUrl
+      _                      -> do
+        logError (hLog h) $ "UNKNOWN RESPONSE to getPhotoServer:\n" ++ show json
+        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
+
+checkLoadDocResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m LoadDocResp
+checkLoadDocResponse h json = do
+  case decode json of
+      Just loadDocResp@(LoadDocResp file) -> return loadDocResp
+      _                      -> do
+        logError (hLog h) $ "UNKNOWN RESPONSE to loadDocToServer:\n" ++ show json
+        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
+
+checkSaveDocResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m DocInfo
+checkSaveDocResponse h json = do
+  case decode json of
+      Just (SaveDocResp (ResponseSDR "doc" (DocInfo id ownerId) )) -> return (DocInfo id ownerId)
+      _                      -> do
+        logError (hLog h) $ "UNKNOWN RESPONSE to saveDocOnServer:\n" ++ show json
+        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
+
+checkSaveDocAuMesResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m DocInfo
+checkSaveDocAuMesResponse h json = do
+  case decode json of
+      Just (SaveDocAuMesResp (ResponseSDAMR "audio_message" (DocInfo id ownerId) )) -> return (DocInfo id ownerId)
+      _                      -> do
+        logError (hLog h) $ "UNKNOWN RESPONSE to saveDocAudioMesOnServer:\n" ++ show json
+        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
+
+checkLoadPhotoResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m LoadPhotoResp
+checkLoadPhotoResponse h json = do
+  case decode json of
+      Just loadPhotoResp@(LoadPhotoResp server hash photo) -> return loadPhotoResp
+      _                      -> do
+        logError (hLog h) $ "UNKNOWN RESPONSE to loadPhotoToServer:\n" ++ show json
+        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
+
+checkSavePhotoResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m DocInfo
+checkSavePhotoResponse h json = do
+  case decode json of
+      Just (SavePhotoResp [DocInfo id ownerId ]) -> return (DocInfo id ownerId )
+      _                      -> do
+        logError (hLog h) $ "UNKNOWN RESPONSE to savePhotoOnServer:\n" ++ show json
+        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
+
+
 
 
 getLongPollServer' :: Handle IO -> IO LBS.ByteString
@@ -479,30 +412,6 @@ getLongPollServer' h = do
   req <- parseRequest $ "https://api.vk.com/method/groups.getLongPollServer?group_id=" ++ show (cGroupId (hConf h)) ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
   res <- httpLbs req manager
   return (responseBody res)
-
-getDocServer' :: Handle IO -> Int -> String -> IO LBS.ByteString
-getDocServer' h usId type' = do
-  manager <- newTlsManager
-  req <- parseRequest $ "https://api.vk.com/method/docs.getMessagesUploadServer?type=" ++ type' ++ "&peer_id=" ++ show usId ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
-  res <- httpLbs req manager
-  return (responseBody res)
-
-
-
-getPhotoServer' :: Handle IO -> Int -> IO LBS.ByteString
-getPhotoServer' h usId = do
-  manager <- newTlsManager
-  req <- parseRequest $ "https://api.vk.com/method/photos.getMessagesUploadServer?peer_id=" ++ show usId ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
-  res <- httpLbs req manager
-  return (responseBody res)
-
-checkGetUploadServResponse :: (Monad m, MonadCatch m) => Handle m -> LBS.ByteString -> m T.Text
-checkGetUploadServResponse h json = do
-  case decode json of
-      Just (UploadServerResponse (UploadUrl serUrl)) -> return serUrl
-      _                      -> do
-        logError (hLog h) $ "UNKNOWN RESPONSE to getPhotoServer:\n" ++ show json
-        throwM $ CheckGetServerResponseException $ "UNKNOWN RESPONSE:\n"   ++ show json
 
 getUpdates' :: T.Text -> T.Text -> T.Text -> IO LBS.ByteString
 getUpdates' key server ts = do
@@ -529,21 +438,6 @@ sendMsg' h usId txt fwds attachStrings stickerId (lat,long)  = do
   res <- httpLbs req manager
   return (responseBody res)
 
-sendTxtMsg h usId txt = sendMsg h usId txt [] [] "" ("","")
-sendAttachMaybeGeoMsg h usId txt attachStrs maybeGeo = case maybeGeo of 
-  Nothing -> sendMsg h usId txt [] attachStrs "" ("","")
-  Just (Geo "point" (Coordinates lat long)) -> 
-    sendMsg h usId txt [] attachStrs "" (show lat,show long)
-  _ -> do
-    logError (hLog h) $ "UNKNOWN GEO type\n" ++ show maybeGeo
-    throwM $ DuringGetUpdatesException $ "UNKNOWN GEO type\n" ++ show maybeGeo
-
-
-sendStickMsg :: (Monad m, MonadCatch m) => Handle m -> Int -> Int -> m LBS.ByteString
-sendStickMsg  h usId stickerId  = sendMsg h usId "" [] [] (show stickerId) ("","")
-
-
-
 sendKeyb' :: Handle IO -> Int -> Int -> T.Text -> IO LBS.ByteString
 sendKeyb' h usId n msg = do
   manager <- newTlsManager
@@ -559,6 +453,72 @@ sendKeyb' h usId n msg = do
   res <- httpLbs req manager
   return (responseBody res)
 
+getDocServer' :: Handle IO -> Int -> String -> IO LBS.ByteString
+getDocServer' h usId type' = do
+  manager <- newTlsManager
+  req <- parseRequest $ "https://api.vk.com/method/docs.getMessagesUploadServer?type=" ++ type' ++ "&peer_id=" ++ show usId ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
+  res <- httpLbs req manager
+  return (responseBody res)
+
+loadDocToServ' :: T.Text -> T.Text -> BS.ByteString -> String -> IO LBS.ByteString
+loadDocToServ' serUrl docUrl bs ext = do
+  manager <- newTlsManager
+  initReq <- parseRequest $ T.unpack serUrl
+  req     <- (formDataBody [partFileRequestBody "file" (T.unpack docUrl ++ " file." ++ ext) $ RequestBodyBS bs]
+                initReq)
+  res <- httpLbs req manager
+  return (responseBody res)
+
+saveDocOnServ' :: Handle IO -> LoadDocResp -> String -> IO LBS.ByteString
+saveDocOnServ' h (LoadDocResp file) title = do
+  manager <- newTlsManager
+  initReq <- parseRequest $ "https://api.vk.com/method/docs.save"
+  let param1 = ("file"        , fromString file)
+  let param2 = ("title"       , fromString title)
+  let param3 = ("access_token", fromString (cBotToken $ (hConf h))) 
+  let param4 = ("v"           ,"5.103")
+  let params = param1 : param2 : param3 : param4 : []   
+  let req = urlEncodedBody params initReq
+  res <- httpLbs req manager
+  return (responseBody res)
+
+getPhotoServer' :: Handle IO -> Int -> IO LBS.ByteString
+getPhotoServer' h usId = do
+  manager <- newTlsManager
+  req <- parseRequest $ "https://api.vk.com/method/photos.getMessagesUploadServer?peer_id=" ++ show usId ++ "&access_token=" ++ cBotToken (hConf h) ++ "&v=5.103"
+  res <- httpLbs req manager
+  return (responseBody res)
+
+loadPhotoToServ' :: T.Text -> T.Text -> BS.ByteString -> IO LBS.ByteString
+loadPhotoToServ' serUrl picUrl bs = do
+  manager <- newTlsManager
+  initReq <- parseRequest $ T.unpack serUrl
+  req     <- (formDataBody [partFileRequestBody "photo" (T.unpack picUrl) $ RequestBodyBS bs]
+                initReq)
+  res <- httpLbs req manager
+  return (responseBody res)
+
+savePhotoOnServ' :: Handle IO -> LoadPhotoResp -> IO LBS.ByteString
+savePhotoOnServ' h (LoadPhotoResp server hash photo) = do
+  manager <- newTlsManager
+  initReq <- parseRequest $ "https://api.vk.com/method/photos.saveMessagesPhoto"
+  let param1 = ("server"      , fromString . show $ server) 
+  let param2 = ("hash"        , fromString hash)
+  let param3 = ("photo"       , fromString photo)
+  let param4 = ("access_token", fromString (cBotToken $ (hConf h))) 
+  let param5 = ("v"           ,"5.103")
+  let params = param1 : param2 : param3 : param4 : param5 : [] 
+  let req = urlEncodedBody params initReq
+  res <- httpLbs req manager
+  return (responseBody res)
+
+goToUrl' :: T.Text -> IO BS.ByteString
+goToUrl' url = do
+  manager <- newTlsManager
+  req <- parseRequest $ T.unpack url
+  res  <- httpLbs req manager
+  let bs = LBS.toStrict . responseBody $ res
+  return bs
 
 extractUpdates :: LBS.ByteString -> [Update]
 extractUpdates = updates . fromJust . decode 
@@ -604,7 +564,14 @@ checkTextButton :: T.Text -> Maybe Int
 checkTextButton text =
     case text of 
       { "1" -> Just 1 ; "2" -> Just 2 ; "3" -> Just 3 ; "4" -> Just 4 ; "5" -> Just 5 ; _ -> Nothing }
-
   
-
+prettyMsgInfo :: Int -> T.Text -> [Object] -> [Attachment] -> Maybe Geo -> String
+prettyMsgInfo usId txt [] [] Nothing = "Get TextMsg: " ++ show txt ++ " from user " ++ show usId ++ "\n"
+prettyMsgInfo usId txt objs [] Nothing = "Get ForwardMsg: " ++ show objs ++ " from user " ++ show usId ++ "\n"
+prettyMsgInfo usId txt [] [] (Just geo) = "Get GeoMsg: " ++ show geo ++ " from user " ++ show usId ++ "\n"
+prettyMsgInfo usId txt [] attachs Nothing = "Get AttachmentMsg: " ++ show attachs ++ " from user " ++ show usId ++ "\n"
+prettyMsgInfo usId txt objs attachs Nothing = "Get AttachmentMsg: " ++ show attachs ++ ", with ForwardParts: " ++ show objs ++ "  from user " ++ show usId ++ "\n"
+prettyMsgInfo usId txt [] attachs (Just geo) = "Get AttachmentMsg: " ++ show attachs ++ ", with Geo: " ++ show geo ++ "  from user " ++ show usId ++ "\n"
+prettyMsgInfo usId txt objs [] (Just geo) = "Get ForwardMsg: " ++ show objs ++ ", with Geo: " ++ show geo ++ "  from user " ++ show usId ++ "\n"
+prettyMsgInfo usId txt objs attachs (Just geo) = "Get AttachmentMsg: " ++ show attachs ++ ", with Geo: " ++ show geo ++ ", with ForwardParts: " ++ show objs ++ "  from user " ++ show usId ++ "\n"
 
